@@ -1,5 +1,6 @@
-# analyst_instant_spot_final_ultra.py
-# Versi ultra stable — 200 koin spot, tanpa error, support fibo, structure, conviction
+# analyst_instant_spot_final_ultra_plus.py
+# Versi ultra plus — 200+ koin spot, termasuk HYPEUSDT, ASTERUSDT, LAUNCHCOINUSDT, USELESSCOINUSDT
+# Aman dari error, MultiIndex, dan kolom hilang
 
 import streamlit as st
 import pandas as pd
@@ -9,11 +10,11 @@ import plotly.graph_objects as go
 import time
 
 # ======== CONFIG ========
-st.set_page_config(layout="wide", page_title="AI Analyst Spot Ultra Stable")
+st.set_page_config(layout="wide", page_title="AI Analyst Spot Ultra Plus")
 st.set_option('client.showErrorDetails', True)
 
-st.title("🚀 Instant AI Analyst — Spot Only (Ultra Stable)")
-st.caption("Struktur • Fibonacci • Support/Resistance • Conviction • 200 Coin Yahoo Spot")
+st.title("🚀 Instant AI Analyst — Spot Only (Ultra Plus)")
+st.caption("Struktur • Fibonacci • Support/Resistance • Conviction • 200+ Coin Spot Yahoo Finance")
 st.markdown("---")
 
 col1, col2 = st.columns([2, 8])
@@ -36,9 +37,11 @@ BASE = [
     "BOMEUSDT","TURBOUSDT","ORDIUSDT","SATSUSDT","FLOKIUSDT","CATIUSDT","DEGENUSDT","ALEXUSDT","XAIUSDT","AEVOUSDT",
     "ETHFIUSDT","ENAUSDT","REZUSDT","COWUSDT","PORTALUSDT","JTOUSDT","MANTAUSDT","JUPUSDT","ALTUSDT","AXLUSDT",
     "TNSRUSDT","CETUSUSDT","CAGAUSDT","NIBIUSDT","WUSDT","BNXUSDT","DYMUSDT","LPTUSDT","IDUSDT","IOUSDT",
-    "VANAUSDT","BABYDOGEUSDT","GMEUSDT","GRTUSDT","XNOUSDT","BEAMUSDT","SKLUSDT","KSMUSDT","CEEKUSDT","ENJUSDT"
+    "VANAUSDT","BABYDOGEUSDT","GMEUSDT","BEAMUSDT","SKLUSDT","KSMUSDT","CEEKUSDT","ENJUSDT",
+    # koin tambahan custom user
+    "HYPEUSDT","ASTERUSDT","LAUNCHCOINUSDT","USELESSCOINUSDT"
 ]
-COINS = BASE[:200]
+COINS = BASE[:204]
 TOTAL = len(COINS)
 YF_INTERVAL = {"1d": "1d", "4h": "60m", "1h": "60m"}
 def to_yf(sym): return sym[:-4] + "-USD" if sym.endswith("USDT") else sym
@@ -161,7 +164,6 @@ except Exception:
 if chart is None or not isinstance(chart, pd.DataFrame) or chart.empty:
     st.warning("⚠️ Data grafik tidak tersedia.")
 else:
-    # pastikan kolom lengkap
     for name in ["Open","High","Low","Close"]:
         if name not in chart.columns:
             chart[name] = chart["Close"]
