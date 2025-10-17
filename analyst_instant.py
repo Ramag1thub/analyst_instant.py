@@ -1,6 +1,7 @@
 # File: analyst_instant.py
-# Versi: 32.0 - SINYAL RENDAH DIJAMIN (Menggunakan Data Mover sebagai Fallback Sinyal)
-# Tujuan: Memastikan sinyal Konviksi Rendah pasti muncul dengan menggunakan data pergerakan 24 jam sebagai kriteria fallback.
+# Versi: 33.0 - UI LOGIKA TERBUKA TOTAL (Memastikan Timeframe dan Tombol Selalu Terlihat)
+# Tujuan: Memindahkan Timeframe Selector ke bagian paling atas agar selalu dapat diakses, 
+# bahkan ketika Health Check gagal dan memanggil st.stop().
 
 import streamlit as st
 import pandas as pd
@@ -25,7 +26,7 @@ BASE_COIN_UNIVERSE = [
 # --- DEKLARASI GLOBAL ---
 total_coins_scanned = len(BASE_COIN_UNIVERSE)
 
-# --- UI/UX CSS (DIPINDAHKAN KE ATAS) ---
+# --- UI/UX CSS ---
 INSTANT_CSS = """
 <style>
     .stApp { background-color: #151515; color: #d1d1d1; font-family: 'Helvetica Neue', Arial, sans-serif; font-size: 14px; }
@@ -47,6 +48,17 @@ INSTANT_CSS = """
 # --- PENGATURAN HALAMAN & KONFIGURASI AWAL ---
 st.set_page_config(layout="wide", page_title="Instant AI Analyst", initial_sidebar_state="collapsed")
 st.markdown(INSTANT_CSS, unsafe_allow_html=True) 
+
+# --- HEADER DAN TIMEFRAME SELECTOR (DIPINDAHKAN KE SINI) ---
+st.title("🚀 Instant AI Signal Dashboard")
+st.caption(f"Menganalisis **{total_coins_scanned} koin Blue-Chip (Fokus Kualitas)** dengan **Smart Money Entry**.")
+
+col1, col2, col3 = st.columns([1.5, 1.5, 7])
+selected_tf = col1.selectbox("Pilih Timeframe Sinyal:", ['1d', '4h', '1h'], help="Pilih Timeframe sinyal yang diinginkan.")
+if col2.button("🔄 Scan Ulang Sekarang (Data Penuh)"):
+    st.cache_data.clear() 
+    st.rerun() 
+st.markdown("---")
 # --- FUNGSI HEALTH CHECK API BINANCE ---
 @st.cache_data(ttl=60)
 def binance_health_check():
@@ -289,28 +301,14 @@ is_connected = binance_health_check()
 
 if not is_connected:
     st.error("🔴 **KONEKSI GAGAL TOTAL:** Gagal terhubung ke Binance API (BTC/USDT Health Check).")
-    st.warning("Kendala jaringan eksternal (API Down/Rate Limit) terdeteksi. Silakan coba tombol **Scan Ulang Sekarang** di bawah, atau refresh browser Anda.")
+    st.warning(f"Kendala jaringan eksternal (API Down/Rate Limit) terdeteksi. Silakan coba ubah Timeframe Sinyal ({selected_tf}) atau refresh browser Anda.")
     
-    col1, col2 = st.columns([1.5, 8.5])
-    if col1.button("🔄 Scan Ulang Sekarang (API Check)"):
-        st.cache_data.clear() 
-        st.rerun() 
+    # st.stop() dipindahkan ke sini untuk menghentikan eksekusi kode di bawah
     st.stop()
     
 # Jika terhubung, lanjutkan ke UI dan Pemindaian
 st.success(f"🟢 **KONEKSI API BERHASIL:** Binance API Health Check (BTC/USDT) berhasil. Melanjutkan pemindaian {total_coins_scanned} koin.")
 
-
-# --- ANTARMUKA APLIKASI WEB ---
-st.title("🚀 Instant AI Signal Dashboard")
-st.caption(f"Menganalisis **{total_coins_scanned} koin Blue-Chip (Fokus Kualitas)** dengan **Smart Money Entry**.")
-
-col1, col2, col3 = st.columns([1.5, 1.5, 7])
-selected_tf = col1.selectbox("Pilih Timeframe Sinyal:", ['1d', '4h', '1h'], help="Pilih Timeframe sinyal yang diinginkan.")
-if col2.button("🔄 Scan Ulang Sekarang (Data Penuh)"):
-    st.cache_data.clear() 
-    st.rerun() 
-st.markdown("---")
 
 # --- INISIALISASI VARIABEL RUNTIME ---
 status_placeholder = st.empty() 
