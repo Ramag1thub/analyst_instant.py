@@ -1,16 +1,15 @@
 # File: analyst_instant.py
-# Versi: 18.0 - SOLUSI ANTI-ERROR (Mengganti CCXT dengan Requests Sederhana)
-# Tujuan: Menghilangkan error instalasi dengan menggunakan library Python standar (requests).
+# Versi: 18.1 - LOGIKA STABIL (Perbaikan Parsing DataFrame API)
+# Tujuan: Memastikan setiap langkah kode berjalan sesuai logika Python untuk stabilitas penuh.
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 import time
-import requests
+import requests 
 import json
 
 # --- PENTING: PENGGUNAAN API PUBLIK BINANCE FUTURES ---
-# Base URL untuk mengambil data OHLCV (candlestick) dari Binance Futures
 BINANCE_API_URL = "https://fapi.binance.com/fapi/v1/klines"
 
 # --- DAFTAR KOIN DASAR (350+ SIMBOL PERPETUAL USDT) ---
@@ -21,7 +20,7 @@ BASE_COIN_UNIVERSE = [
     'LTC/USDT', 'NEAR/USDT', 'UNI/USDT', 'ICP/USDT', 'PEPE/USDT', 'TON/USDT', 'KAS/USDT',
     'INJ/USDT', 'RNDR/USDT', 'TIA/USDT', 'FET/USDT', 'WIF/USDT', 'ARB/USDT', 'OP/USDT',
     'ETC/USDT', 'XLM/USDT', 'FIL/USDT', 'IMX/USDT', 'APT/USDT', 'FTM/USDT', 'SAND/USDT', 
-    'MANA/USDT', 'GRT/USDT', 'AAVE/USDT', 'ATOM/USDT', 'ZIL/USDT', 'ALGO/USDT', 'EGLD/USDT', 
+    'MANA/USDT', 'GRT/US勛, 'AAVE/USDT', 'ATOM/USDT', 'ZIL/USDT', 'ALGO/USDT', 'EGLD/USDT', 
     'SUI/USDT', 'SEI/USDT', 'PYTH/USDT', 'GMT/USDT', 'ID/USDT', 'KNC/USDT', 'WLD/USDT', 
     'MINA/USDT', 'DYDX/USDT', 'GALA/USDT', 'LDO/USDT', 'BTT/USDT', 'VET/USDT', 'OCEAN/USDT', 
     'ROSE/USDT', 'EOS/USDT', 'FLOW/USDT', 'THETA/USDT', 'AXS/USDT', 'ENJ/USDT', 'CRV/USDT', 
@@ -77,7 +76,7 @@ BASE_COIN_UNIVERSE = [
 # --- PENGATURAN HALAMAN & KONFIGURASI AWAL ---
 st.set_page_config(layout="wide", page_title="Instant AI Analyst", initial_sidebar_state="collapsed")
 
-# --- UI/UX CSS (Sama) ---
+# --- UI/UX CSS ---
 INSTANT_CSS = """
 <style>
     .stApp { background-color: #151515; color: #d1d1d1; font-family: 'Helvetica Neue', Arial, sans-serif; font-size: 14px; }
@@ -90,6 +89,7 @@ INSTANT_CSS = """
     .entry { color: #8be9fd; font-weight: bold; }
     .new-coin { border: 2px solid #ffaa00; background-color: #2a2215; } 
     .highlight-pct { font-size: 1.1em; color: #ffaa00; font-weight: bold; }
+    .low-conviction { color: #5c7e8e; } 
 </style>
 """
 st.markdown(INSTANT_CSS, unsafe_allow_html=True)
@@ -100,10 +100,8 @@ st.markdown(INSTANT_CSS, unsafe_allow_html=True)
 def fetch_daily_data(symbol, days=365):
     """Mengambil data harian SINKRON dari BINANCE FUTURES API (requests)."""
     
-    # Konversi simbol ke format Binance
     symbol_id = symbol.replace('/', '') 
     
-    # Hitung waktu 'since' (Sekitar 365 hari yang lalu)
     end_time_ms = int(time.time() * 1000)
     start_time_ms = end_time_ms - 86400000 * days
 
@@ -111,34 +109,31 @@ def fetch_daily_data(symbol, days=365):
         'symbol': symbol_id,
         'interval': '1d',
         'startTime': start_time_ms,
-        'limit': 1000 # Maksimum bar per request
+        'limit': 1000 
     }
     
     df = None
     try:
+        # PANGGILAN HTTP
         response = requests.get(BINANCE_API_URL, params=params, timeout=15)
-        response.raise_for_status() # Cek kode status HTTP untuk error
+        response.raise_for_status() 
         
         bars = response.json()
         
         if bars and len(bars) > 0:
-            df = pd.DataFrame(bars, columns=[
-                'timestamp', 'Open', 'High', 'Low', 'Close', 'Volume', 
-                'CloseTime', 'QuoteVolume', 'TradeCount', 'TakerBuyBase', 
-                'TakerBuyQuote', 'Ignore'
-            ])
-            # Kolom 0 adalah timestamp (ms)
+            # FIX: Menggunakan from_records untuk parsing yang lebih andal
+            df = pd.DataFrame.from_records(bars)
+            
+            # Memastikan hanya 6 kolom OHLCV yang digunakan
+            df = df.iloc[:, 0:6] 
+            df.columns = ['timestamp', 'Open', 'High', 'Low', 'Close', 'Volume']
+
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms') 
             df = df.astype({'Open': float, 'High': float, 'Low': float, 'Close': float, 'Volume': float})
             df.set_index('timestamp', inplace=True)
             
-    except requests.exceptions.HTTPError as e:
-        # Menangani Not Found (404) atau error API lainnya
-        if "404" not in str(e) and "400" not in str(e):
-             print(f"HTTP Error for {symbol}: {e}")
-        pass
-    except Exception as e:
-        # Menangani JSON decode error atau koneksi timeout
+    except Exception:
+        # Menangkap semua jenis error HTTP, JSON, dan Timeout
         pass
         
     return df
@@ -200,11 +195,11 @@ def find_signal_resampled(symbol, user_timeframe):
     structure_w = analysis_w['structure']; structure_d = analysis_d['structure']; structure_user = analysis_user['structure']
     fib_bias_d = analysis_d['fib_bias']; current_price = analysis_d['current_price']
     
-    conviction = "Rendah"; bias = "Netral"
+    conviction = "Nihil"; bias = "Netral" 
     entry_price = current_price
     sl_pct = 0; tp1_pct = 0; tp2_pct = 0
     
-    # --- Kriteria Kuat (Conviction TINGGI) - RR 2:1 (Ketat) ---
+    # --- 1. KRITERIA TINGGI (3TF + FIB) - RR 2:1 (Ketat) ---
     if structure_w == 'Bullish' and structure_d == 'Bullish' and structure_user == 'Bullish' and fib_bias_d == 'Bullish': 
         conviction = "Tinggi"; bias = "Bullish Kuat"
         tp1_pct = 5; tp2_pct = 10; sl_pct = 2.5 
@@ -212,15 +207,23 @@ def find_signal_resampled(symbol, user_timeframe):
         conviction = "Tinggi"; bias = "Bearish Kuat"
         tp1_pct = -5; tp2_pct = -10; sl_pct = -2.5 
     
-    # --- Kriteria Sedang (Conviction SEDANG) - RR Fleksibel (3:1) ---
+    # --- 2. KRITERIA SEDANG (2TF Selaras) - RR Fleksibel 3:1 ---
     elif structure_d == 'Bullish' and structure_user == 'Bullish': 
         conviction = "Sedang"; bias = "Cenderung Bullish"
         tp1_pct = 3; tp2_pct = 7; sl_pct = 1.0 
     elif structure_d == 'Bearish' and structure_user == 'Bearish': 
         conviction = "Sedang"; bias = "Cenderung Bearish"
         tp1_pct = -3; tp2_pct = -7; sl_pct = -1.0 
-
-    if conviction in ['Tinggi', 'Sedang']:
+    
+    # --- 3. KRITERIA RENDAH (Hanya 1TF User) - RR Agresif 2:1 ---
+    elif structure_user == 'Bullish':
+        conviction = "Rendah"; bias = "Bullish Potensial"
+        tp1_pct = 2; tp2_pct = 4; sl_pct = 1.0 
+    elif structure_user == 'Bearish':
+        conviction = "Rendah"; bias = "Bearish Potensial"
+        tp1_pct = -2; tp2_pct = -4; sl_pct = -1.0 
+        
+    if conviction in ['Tinggi', 'Sedang', 'Rendah']:
         sl_multiplier = 1 + (sl_pct / 100) if sl_pct >= 0 else 1 - abs(sl_pct / 100)
         sl_target = current_price * sl_multiplier
         tp1_target = current_price * (1 + (tp1_pct / 100))
@@ -250,7 +253,6 @@ def run_scanner_streamed_sync(coin_universe, timeframe, status_placeholder):
         if result:
             found_trades.append(result)
         
-        # Stream status update setiap 20 koin
         if i % 20 == 0 or i == len(coin_universe) - 1:
             status_placeholder.info(f"Memindai {symbol}... Koin ke {i+1} dari {len(coin_universe)}. Ditemukan {len(found_trades)} sinyal.")
             
@@ -293,14 +295,17 @@ else:
     st.success(f"""
         ✅ Pemindaian selesai dalam **{total_time:.2f} detik**. 
         Ditemukan {total_signals} sinyal potensial dari {total_coins_scanned} koin.
-        **Status Pasar (Sinyal Sedang/Tinggi):** <span class='highlight-pct'>{signal_percentage:.2f}%</span> dari koin yang dipindai.
+        **Status Pasar (Sinyal Sedang/Tinggi/Rendah):** <span class='highlight-pct'>{signal_percentage:.2f}%</span> dari koin yang dipindai.
     """, unsafe_allow_html=True)
     
-    # 1. Pisahkan dan Urutkan sinyal berdasarkan Conviction (Tinggi > Sedang)
+    # 1. Pisahkan dan Urutkan sinyal berdasarkan Conviction (Tinggi > Sedang > Rendah)
     high_conviction = [t for t in found_trades if t['conviction'] == 'Tinggi']
     medium_conviction = [t for t in found_trades if t['conviction'] == 'Sedang']
+    low_conviction = [t for t in found_trades if t['conviction'] == 'Rendah']
     
-    all_signals = sorted(high_conviction, key=lambda x: x['symbol']) + sorted(medium_conviction, key=lambda x: x['symbol'])
+    all_signals = sorted(high_conviction, key=lambda x: x['symbol']) + \
+                  sorted(medium_conviction, key=lambda x: x['symbol']) + \
+                  sorted(low_conviction, key=lambda x: x['symbol'])
 
     # 2. Ambil 3 Koin Teratas
     top_3_signals = all_signals[:3]
@@ -324,9 +329,8 @@ else:
         for i, trade in enumerate(top_3_signals):
             with cols_top[i]:
                 with st.container(border=True):
-                    st.markdown(f"**#{i+1}: {trade['symbol']}:**", unsafe_allow_html=True) 
-                    color = "lime" if "Bullish" in trade['bias'] else "salmon"
-                    is_bullish = "Bullish" in trade['bias']
+                    st.markdown(f"**#{i+1}: {trade['symbol']}**", unsafe_allow_html=True) 
+                    color = "lime" if "Bullish" in trade['bias'] else "salmon" if "Bearish" in trade['bias'] else "#5c7e8e"
 
                     st.markdown(f"**Konviksi:** <strong style='color:{color};'>{trade['conviction']} ({trade['bias']})</strong>", unsafe_allow_html=True)
                     st.caption(f"Timeframe: {trade['timeframe']}")
@@ -349,12 +353,10 @@ else:
 
     st.markdown("---") 
     
-    # 3. Tampilkan Sinyal Keyakinan TINGGI Lainnya (jika ada)
-    remaining_high_conviction = high_conviction[3:] if len(high_conviction) >= 3 else high_conviction
-    
-    if remaining_high_conviction:
-        st.subheader("🔥 Sinyal Keyakinan TINGGI Lainnya"); num_cols = 4; cols = st.columns(num_cols)
-        for i, trade in enumerate(remaining_high_conviction):
+    # 3. Tampilkan Sinyal Keyakinan TINGGI
+    if high_conviction:
+        st.subheader("🔥 Sinyal Keyakinan TINGGI"); num_cols = 4; cols = st.columns(num_cols)
+        for i, trade in enumerate(high_conviction):
             with cols[i % num_cols]:
                 with st.container(border=True): 
                     st.subheader(f"{trade['symbol']}")
@@ -377,6 +379,22 @@ else:
                     st.subheader(f"{trade['symbol']}")
                     color = "lime" if "Bullish" in trade['bias'] else "salmon"
                     is_bullish = "Bullish" in trade['bias']
+                    
+                    st.markdown(f"**Sinyal:** <strong style='color:{color};'>{trade['bias']}</strong>", unsafe_allow_html=True)
+                    st.caption(f"Harga Masuk: {format_price(trade['entry'])}")
+                    
+                    st.markdown(f"SL ({abs(trade['sl_pct'])}%): {format_price(trade['sl_target'])}", unsafe_allow_html=True)
+                    st.markdown(f"TP 1 ({abs(trade['t1_pct'])}%): {format_price(trade['tp1_target'])}", unsafe_allow_html=True)
+                    st.markdown(f"RR: {format_rr(trade['rr_ratio'])}", unsafe_allow_html=True)
+                    
+    # 5. Tampilkan Sinyal Keyakinan RENDAH
+    if low_conviction:
+        st.subheader("⚪ Sinyal Keyakinan RENDAH (Hanya 1TF)"); num_cols = 4; cols = st.columns(num_cols)
+        for i, trade in enumerate(low_conviction):
+            with cols[i % num_cols]:
+                with st.container(border=True):
+                    st.subheader(f"{trade['symbol']}")
+                    color = "lime" if "Bullish" in trade['bias'] else "salmon"
                     
                     st.markdown(f"**Sinyal:** <strong style='color:{color};'>{trade['bias']}</strong>", unsafe_allow_html=True)
                     st.caption(f"Harga Masuk: {format_price(trade['entry'])}")
