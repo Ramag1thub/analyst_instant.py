@@ -1,6 +1,6 @@
 # File: analyst_instant.py
-# Versi: 18.1 - LOGIKA STABIL (Perbaikan Parsing DataFrame API)
-# Tujuan: Memastikan setiap langkah kode berjalan sesuai logika Python untuk stabilitas penuh.
+# Versi: 18.2 - STABILITAS TOTAL (Fix Syntax Error & Logika Teruji)
+# Tujuan: Memastikan logika kode berjalan sesuai standar Python dan bebas dari typo.
 
 import streamlit as st
 import pandas as pd
@@ -14,13 +14,13 @@ BINANCE_API_URL = "https://fapi.binance.com/fapi/v1/klines"
 
 # --- DAFTAR KOIN DASAR (350+ SIMBOL PERPETUAL USDT) ---
 BASE_COIN_UNIVERSE = [
-    # --- DAFTAR LENGKAP KOIN (350+ total) ---
+    # Daftar Koin yang sudah diperiksa dan diverifikasi sintaksnya (350+ total)
     'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'DOGE/USDT', 'BNB/USDT', 'ADA/USDT',
     'AVAX/USDT', 'LINK/USDT', 'DOT/USDT', 'MATIC/USDT', 'SHIB/USDT', 'TRX/USDT', 'BCH/USDT',
     'LTC/USDT', 'NEAR/USDT', 'UNI/USDT', 'ICP/USDT', 'PEPE/USDT', 'TON/USDT', 'KAS/USDT',
     'INJ/USDT', 'RNDR/USDT', 'TIA/USDT', 'FET/USDT', 'WIF/USDT', 'ARB/USDT', 'OP/USDT',
     'ETC/USDT', 'XLM/USDT', 'FIL/USDT', 'IMX/USDT', 'APT/USDT', 'FTM/USDT', 'SAND/USDT', 
-    'MANA/USDT', 'GRT/US勛, 'AAVE/USDT', 'ATOM/USDT', 'ZIL/USDT', 'ALGO/USDT', 'EGLD/USDT', 
+    'MANA/USDT', 'GRT/USDT', 'AAVE/USDT', 'ATOM/USDT', 'ZIL/USDT', 'ALGO/USDT', 'EGLD/USDT', 
     'SUI/USDT', 'SEI/USDT', 'PYTH/USDT', 'GMT/USDT', 'ID/USDT', 'KNC/USDT', 'WLD/USDT', 
     'MINA/USDT', 'DYDX/USDT', 'GALA/USDT', 'LDO/USDT', 'BTT/USDT', 'VET/USDT', 'OCEAN/USDT', 
     'ROSE/USDT', 'EOS/USDT', 'FLOW/USDT', 'THETA/USDT', 'AXS/USDT', 'ENJ/USDT', 'CRV/USDT', 
@@ -114,14 +114,12 @@ def fetch_daily_data(symbol, days=365):
     
     df = None
     try:
-        # PANGGILAN HTTP
         response = requests.get(BINANCE_API_URL, params=params, timeout=15)
         response.raise_for_status() 
         
         bars = response.json()
         
         if bars and len(bars) > 0:
-            # FIX: Menggunakan from_records untuk parsing yang lebih andal
             df = pd.DataFrame.from_records(bars)
             
             # Memastikan hanya 6 kolom OHLCV yang digunakan
@@ -133,7 +131,6 @@ def fetch_daily_data(symbol, days=365):
             df.set_index('timestamp', inplace=True)
             
     except Exception:
-        # Menangkap semua jenis error HTTP, JSON, dan Timeout
         pass
         
     return df
