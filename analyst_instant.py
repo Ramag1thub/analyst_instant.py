@@ -1,6 +1,6 @@
 # File: analyst_instant.py
-# Versi: 29.0 - FINAL HEALTH CHECK & STABILITAS (Top 35 Koin + Verifikasi Koneksi)
-# Tujuan: Menambahkan fungsi verifikasi koneksi API (Health Check) sebelum memindai data.
+# Versi: 30.0 - HARDEST LOCK API CHANGE (Mengganti Endpoint untuk Stabilitas)
+# Tujuan: Mengganti sumber data ke endpoint Ticker 24H yang lebih ringan untuk mengatasi kegagalan koneksi.
 
 import streamlit as st
 import pandas as pd
@@ -9,8 +9,10 @@ import time
 import requests 
 import json
 
-# --- PENTING: PENGGUNAAN API PUBLIK BINANCE FUTURES ---
-BINANCE_API_URL = "https://fapi.binance.com/fapi/v1/klines"
+# --- PERUBAHAN KRUSIAL: MENGGANTI ENDPOINT API ---
+# Endpoint Ticker 24 Jam (JAUH LEBIH RINGAN DAN STABIL DARI KLINE)
+BINANCE_TICKER_URL = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+BINANCE_KLINE_URL = "https://fapi.binance.com/fapi/v1/klines"
 REQUEST_TIMEOUT = 30 
 
 # --- DAFTAR KOIN BLUE-CHIP (HANYA ~35 KOIN LIKUIDITAS TERTINGGI UNTUK STABILITAS) ---
@@ -27,12 +29,11 @@ total_coins_scanned = len(BASE_COIN_UNIVERSE)
 
 # --- FUNGSI HEALTH CHECK API BINANCE ---
 @st.cache_data(ttl=60)
-def binance_health_check():
-    """Memeriksa koneksi API dengan mengambil data BTC. Mengembalikan True jika berhasil."""
+def binance_health_check_ticker():
+    """Memeriksa koneksi API dengan endpoint 24hr Ticker."""
     try:
-        symbol_id = 'BTCUSDT'
-        params = {'symbol': symbol_id, 'interval': '1m', 'limit': 1}
-        response = requests.get(BINANCE_API_URL, params=params, timeout=5) # Timeout singkat
+        # Mengambil semua data ticker 24 jam sekaligus (weight 40, sangat besar)
+        response = requests.get(BINANCE_TICKER_URL, timeout=10) 
         response.raise_for_status()
         bars = response.json()
         if bars and len(bars) > 0:
@@ -42,38 +43,14 @@ def binance_health_check():
         return False
     except Exception:
         return False
-# --- PENGATURAN HALAMAN & KONFIGURASI AWAL ---
-st.set_page_config(layout="wide", page_title="Instant AI Analyst", initial_sidebar_state="collapsed")
 
-# --- UI/UX CSS (SAMA) ---
-INSTANT_CSS = """
-<style>
-    .stApp { background-color: #151515; color: #d1d1d1; font-family: 'Helvetica Neue', Arial, sans-serif; font-size: 14px; }
-    .block-container { padding: 2rem 1.5rem 1rem 1.5rem !important; }
-    .st-emotion-cache-16txtl3 { padding-top: 0rem; }
-    .signal-card { background-color: #1e1e1e; border-radius: 8px; border: 1px solid #2a2a2a; padding: 1rem; margin-bottom: 1rem; }
-    footer { visibility: hidden; }
-    .profit { color: #50fa7b; font-weight: bold; } 
-    .loss { color: #ff6e6e; font-weight: bold; }
-    .entry { color: #8be9fd; font-weight: bold; }
-    .new-coin { border: 2px solid #ffaa00; background-color: #2a2215; } 
-    .highlight-pct { font-size: 1.1em; color: #ffaa00; font-weight: bold; }
-    .low-conviction { color: #5c7e8e; } 
-    .report-detail { font-size: 12px; margin-top: 5px; line-height: 1.5; }
-    .mover-price { font-size: 1.1em; }
-</style>
-"""
-st.markdown(INSTANT_CSS, unsafe_allow_html=True)
-
-
-# --- FUNGSI UTAMA (SINKRON - MENGGUNAKAN REQUESTS) ---
-
+# --- FUNGSI PENGAMBILAN DATA (KLINE 7 HARI) ---
+# FUNGSI fetch_daily_data dipertahankan untuk KLINEs
 @st.cache_data(show_spinner=True, ttl=60) 
-def fetch_daily_data(symbol, days=7): # Mengambil data HANYA 7 HARI untuk beban API yang sangat ringan
-    """Mengambil data harian SINKRON dari BINANCE FUTURES API (requests)."""
+def fetch_daily_data(symbol, days=7):
+    """Mengambil data KLINE HANYA 7 HARI untuk analisis struktur."""
     
     symbol_id = symbol.replace('/', '') 
-    
     end_time_ms = int(time.time() * 1000)
     start_time_ms = end_time_ms - 86400000 * days
 
@@ -86,17 +63,15 @@ def fetch_daily_data(symbol, days=7): # Mengambil data HANYA 7 HARI untuk beban 
     
     df = None
     try:
-        response = requests.get(BINANCE_API_URL, params=params, timeout=REQUEST_TIMEOUT)
+        response = requests.get(BINANCE_KLINE_URL, params=params, timeout=REQUEST_TIMEOUT)
         response.raise_for_status() 
         
         bars = response.json()
         
         if bars and len(bars) > 0:
             df = pd.DataFrame.from_records(bars)
-            
             df = df.iloc[:, 0:6] 
             df.columns = ['timestamp', 'Open', 'High', 'Low', 'Close', 'Volume']
-
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms') 
             df = df.astype({'Open': float, 'High': float, 'Low': float, 'Close': float, 'Volume': float})
             df.set_index('timestamp', inplace=True)
@@ -111,8 +86,7 @@ def fetch_daily_data(symbol, days=7): # Mengambil data HANYA 7 HARI untuk beban 
 @st.cache_data(show_spinner=False)
 def analyze_structure(df):
     """Analisis struktur dan mengembalikan status lengkap."""
-    # Kriteria 7 bar tetap dipertahankan untuk analisis struktur minimum
-    if df is None or len(df) < 7: 
+    if df is None or len(df) < 7: # Diturunkan ke 7 hari untuk data KLINE yang ringan
         return {'structure': 'Data Tidak Cukup', 'current_price': None, 'fib_bias': 'Netral', 'high': None, 'low': None, 'proxy_low': None, 'proxy_high': None, 'change_pct': 0.0}
 
     structure = "Konsolidasi"
@@ -129,7 +103,7 @@ def analyze_structure(df):
             if high_h and low_h: structure = "Bullish"
             elif recent_highs.iloc[-1] < recent_highs.iloc[-2] and recent_lows.iloc[-1] < recent_lows.iloc[-2]: structure = "Bearish"
 
-    # Logika Fibonacci 
+    # Logika Fibonacci (tetap dipertahankan)
     max_price = df['High'].max(); min_price = df['Low'].min(); diff = max_price - min_price
     fib_level = {}
     for level in [0.236, 0.382, 0.5, 0.618, 0.786]:
@@ -158,7 +132,7 @@ def analyze_structure(df):
     }
 
 def find_signal_resampled(symbol, user_timeframe):
-    """Mengambil data dan menganalisis secara lokal (SINKRON)."""
+    """Mengambil data KLINE 7 hari dan menganalisis secara lokal (SINKRON)."""
     
     df_daily = fetch_daily_data(symbol) 
     
@@ -204,7 +178,7 @@ def find_signal_resampled(symbol, user_timeframe):
     entry_price = current_price 
     sl_pct = 0; tp1_pct = 0; tp2_pct = 0
     
-    # --- LOGIKA KONVIKSI & PENETAPAN ENTRY SMART MONEY (DILONGGARKAN) ---
+    # --- LOGIKA KONVIKSI & PENETAPAN ENTRY SMART MONEY (PALING LONGGAR) ---
     
     # 1. KRITERIA TINGGI (Paling ketat)
     if structure_w == 'Bullish' and structure_d == 'Bullish' and structure_user == 'Bullish' and fib_bias_d == 'Bullish': 
@@ -286,12 +260,17 @@ def run_scanner_streamed_sync(coin_universe, timeframe, status_placeholder):
             
     return all_results
 
-# --- EKSEKUSI: HEALTH CHECK ---
-is_connected = binance_health_check()
+# --- PENGATURAN HALAMAN & KONFIGURASI AWAL ---
+st.set_page_config(layout="wide", page_title="Instant AI Analyst", initial_sidebar_state="collapsed")
+st.markdown(INSTANT_CSS, unsafe_allow_html=True) # Apply CSS
+
+
+# --- EKSEKUSI: HEALTH CHECK (Menggunakan Endpoint Ticker yang Ringan) ---
+is_connected = binance_health_check_ticker()
 
 if not is_connected:
-    st.error("🔴 **KONEKSI GAGAL TOTAL:** Gagal terhubung ke Binance API (BTC/USDT Health Check).")
-    st.warning("Silakan coba tombol **Scan Ulang Sekarang** di bawah, atau periksa status API Binance di luar Streamlit Cloud. Proses pemindaian tidak dilanjutkan.")
+    st.error("🔴 **KONEKSI GAGAL TOTAL:** Gagal terhubung ke Binance 24hr Ticker API.")
+    st.warning("Kendala jaringan eksternal (API Down) terdeteksi. Silakan coba tombol **Scan Ulang Sekarang** di bawah.")
     
     col1, col2 = st.columns([1.5, 8.5])
     if col1.button("🔄 Scan Ulang Sekarang (API Check)"):
@@ -300,7 +279,7 @@ if not is_connected:
     st.stop()
     
 # Jika terhubung, lanjutkan ke UI dan Pemindaian
-st.success("🟢 **KONEKSI API BERHASIL:** Binance API Health Check (BTC/USDT) berhasil. Melanjutkan pemindaian.")
+st.success(f"🟢 **KONEKSI API BERHASIL:** Binance 24hr Ticker API Health Check berhasil. Melanjutkan pemindaian {total_coins_scanned} koin.")
 
 
 # --- ANTARMUKA APLIKASI WEB ---
@@ -309,7 +288,7 @@ st.caption(f"Menganalisis **{total_coins_scanned} koin Blue-Chip (Fokus Kualitas
 
 col1, col2, col3 = st.columns([1.5, 1.5, 7])
 selected_tf = col1.selectbox("Pilih Timeframe Sinyal:", ['1d', '4h', '1h'], help="Pilih Timeframe sinyal yang diinginkan.")
-# Tombol Scan Ulang telah dipindahkan ke atas dalam blok error untuk akses mudah
+# Tombol Scan Ulang dipindahkan ke atas dalam blok error untuk akses mudah
 if col2.button("🔄 Scan Ulang Sekarang (Data Penuh)"):
     st.cache_data.clear() 
     st.rerun() 
