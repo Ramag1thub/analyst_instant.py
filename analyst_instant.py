@@ -1,6 +1,6 @@
 # File: analyst_instant.py
-# Versi: 21.4 - FINAL FILTER MOVER (Memastikan Top Mover Hanya Koin Sehat)
-# Tujuan: Memastikan filter Mover Report hanya menampilkan koin yang datanya berhasil dianalisis change_pct-nya.
+# Versi: 22.0 - INTEGRATED MOVER & CONTEXT (Memastikan Top/Bottom Movers Selalu Tampil dengan Konteks)
+# Tujuan: Memenuhi permintaan untuk selalu menampilkan Top 3 Bullish dan Bearish Movers beserta konteks struktural mereka.
 
 import streamlit as st
 import pandas as pd
@@ -57,7 +57,7 @@ BASE_COIN_UNIVERSE = [
     'ONE/USDT', 'OXT/USDT', 'PERL/USDT', 'PUNDIX/USDT', 'QLC/USDT', 
     'QUICK/USDT', 'RAY/USDT', 'REEF/USDT', 'REN/USDT', 'REQ/USDT', 'RVN/USDT', 'SOLO/USDT', 
     'SOS/USDT', 'STEEM/USDT', 'STG/USDT', 'STORJ/USDT', 'SUN/USDT', 'SUSHI/USDT', 'T/USDT', 
-    'TOMO/USDT', 'TRB/USDT', 'TUSD/USDT', 'UTK/USDT', 'VIB/USDT', 
+    'TOMO/USDT', 'TRB/USDT', 'TUSD/USDT', 'UMA/USDT', 'UNFI/USDT', 'UTK/USDT', 'VIB/USDT', 
     'WAN/USDT', 'XEM/USDT', 'XYO/USDT', '1000SHIB/USDT',
     'UMA/USDT', 'LRC/USDT', 'AXS/USDT', 'BAT/USDT', 
     'CHZ/USDT', 'DODO/USDT', 'GALA/USDT', 'GRT/USDT', 'MKR/USDT', 'NEO/USDT', 
@@ -196,6 +196,7 @@ def find_signal_resampled(symbol, user_timeframe):
     df_daily = fetch_daily_data(symbol) 
     
     if df_daily is None: 
+        # Error: Koneksi gagal total
         return {'symbol': symbol, 'conviction': 'Error', 'change_pct': 0.0, 'current_price': None}
 
     resample_rules = {'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'}
@@ -206,7 +207,10 @@ def find_signal_resampled(symbol, user_timeframe):
     
     # Cek minimal data untuk analisis struktur dan resample (minimal 7 hari)
     if len(df_daily) < 7: 
-        return {'symbol': symbol, 'conviction': 'Nihil', 'change_pct': change_pct, 'current_price': current_price}
+        # Nihil: Data tidak cukup untuk analisis yang mendalam, tetapi data mover tersedia
+        return {'symbol': symbol, 'conviction': 'Nihil', 'change_pct': change_pct, 'current_price': current_price,
+                'report_w_structure': analysis_d.get('structure'), 
+                'report_d_structure': analysis_d.get('structure')}
 
 
     try:
@@ -221,8 +225,10 @@ def find_signal_resampled(symbol, user_timeframe):
             analysis_user = analyze_structure(df_user)
             
     except Exception:
-        # Jika resampling gagal (data tidak cukup untuk TF lebih tinggi dari D1), tetap return data mover
-        return {'symbol': symbol, 'conviction': 'Nihil', 'change_pct': change_pct, 'current_price': current_price} 
+        # Jika resampling gagal (data tidak cukup untuk TF lebih tinggi dari D1)
+        return {'symbol': symbol, 'conviction': 'Nihil', 'change_pct': change_pct, 'current_price': current_price,
+                'report_w_structure': analysis_d.get('structure'), 
+                'report_d_structure': analysis_d.get('structure')} 
 
     # Mengambil Status Struktur dan Data Proksi
     structure_w = analysis_w['structure']; structure_d = analysis_d['structure']; structure_user = analysis_user['structure']
@@ -288,7 +294,9 @@ def find_signal_resampled(symbol, user_timeframe):
     # Jika sinyal Nihil, kembalikan data minimal untuk mover report
     return {
         'symbol': symbol, 'conviction': 'Nihil', 'change_pct': change_pct,
-        'current_price': current_price
+        'current_price': current_price,
+        'report_w_structure': structure_w, 
+        'report_d_structure': structure_d,
     }
 
 def run_scanner_streamed_sync(coin_universe, timeframe, status_placeholder):
@@ -371,7 +379,7 @@ def display_report_details(trade):
             <b>STRUKTUR PASAR:</b><br>
             • Weekly (1W): <span style='color:{get_trend_color(trade.get('report_w_structure', 'N/A'))};'>{trade.get('report_w_structure', 'N/A')}</span><br>
             • Daily (1D): <span style='color:{get_trend_color(trade.get('report_d_structure', 'N/A'))};'>{trade.get('report_d_structure', 'N/A')}</span><br>
-            • User TF ({trade['timeframe']}): <span style='color:{get_trend_color(trade.get('report_user_structure', 'N/A'))};'>{trade.get('report_user_structure', 'N/A')}</span><br>
+            • User TF ({selected_tf}): <span style='color:{get_trend_color(trade.get('report_user_structure', 'N/A'))};'>{trade.get('report_user_structure', 'N/A')}</span><br>
             <b>KONF. FIBONACCI:</b> {trade.get('report_fib_bias', 'N/A')}
         </div>
         """, unsafe_allow_html=True)
@@ -385,56 +393,83 @@ total_signals = len(found_trades)
 signal_percentage = (total_signals / total_coins_scanned) * 100 if total_coins_scanned > 0 else 0
 
 
-if not found_trades:
+# --- BAGIAN REPORT MOVER (SELALU TAMPIL) ---
+st.header("⚡ Laporan Koin Penggerak (24 Jam) - Top Movers")
+
+# Kumpulkan semua hasil YANG SEHAT: current_price ada, change_pct != 0, DAN bukan error
+movers = [r for r in all_results if r.get('current_price') is not None and r.get('change_pct') != 0.0 and r.get('conviction') != 'Error']
+
+if movers:
+    # Sortir menggunakan data perubahan 24 jam yang dihitung secara lokal
+    movers.sort(key=lambda x: x['change_pct'], reverse=True)
+    top_bullish = movers[:3]
+    top_bearish = movers[-3:][::-1] # 3 terendah, lalu dibalik
+
+    cols_movers = st.columns(3)
     
-    # KASUS KRITIS: SINYAL NIHIL -> TAMPILKAN TOP & BOTTOM MOVERS (MENGGUNAKAN FALLBACK)
-    st.warning(f"⚠️ Pemindaian selesai dalam **{total_time:.2f} detik**. Tidak ditemukan sinyal *Market Structure* yang kuat saat ini.")
-    st.header("⚡ Laporan Koin Penggerak (24 Jam) - Alternatif Trading")
-    
-    # Kumpulkan semua hasil YANG SEHAT: current_price ada, change_pct != 0, DAN bukan error
-    movers = [r for r in all_results if r.get('current_price') is not None and r.get('change_pct') != 0.0 and r.get('conviction') != 'Error']
+    def get_trend_color(trend):
+        if 'Bullish' in trend: return 'lime'
+        if 'Bearish' in trend: return 'salmon'
+        return '#5c7e8e'
 
-    if movers:
-        # Sortir menggunakan data perubahan 24 jam yang dihitung secara lokal
-        movers.sort(key=lambda x: x['change_pct'], reverse=True)
-        top_bullish = movers[:3]
-        top_bearish = movers[-3:][::-1] # 3 terendah, lalu dibalik
-
-        cols_movers = st.columns(3)
-        with cols_movers[0]:
-            st.subheader("📈 Top 3 Bullish Movers")
-            for mover in top_bullish:
-                color = 'lime' if mover['change_pct'] > 0 else 'salmon'
-                st.markdown(f"""
-                <div class='signal-card'>
-                    **{mover['symbol']}**<br>
-                    <span style='color:{color}; font-weight:bold;'>{mover['change_pct']:.2f}%</span>
-                    <p class='mover-price'>Harga: {format_price(mover['current_price'])}</p>
-                </div>
-                """, unsafe_allow_html=True)
-
-        with cols_movers[1]:
-            st.subheader("📉 Top 3 Bearish Movers")
-            for mover in top_bearish:
-                color = 'salmon' if mover['change_pct'] < 0 else 'lime'
-                st.markdown(f"""
-                <div class='signal-card'>
-                    **{mover['symbol']}**<br>
-                    <span style='color:{color}; font-weight:bold;'>{mover['change_pct']:.2f}%</span>
-                    <p class='mover-price'>Harga: {format_price(mover['current_price'])}</p>
-                </div>
-                """, unsafe_allow_html=True)
+    def get_mover_context(mover):
+        # Menyusun konteks (reason) dari data struktur yang ada
+        w_struct = mover.get('report_w_structure', 'N/A')
+        d_struct = mover.get('report_d_structure', 'N/A')
         
-        with cols_movers[2]:
-             st.subheader("ℹ️ Informasi")
-             st.info("Koin ini memiliki pergerakan harga 24 jam tertinggi. Perubahan dihitung dari candlestick Daily terakhir.")
+        w_color = get_trend_color(w_struct)
+        d_color = get_trend_color(d_struct)
+
+        return f"""
+        <div style='font-size: 11px; margin-top: 5px;'>
+            <b>KONTEKS STRUKTUR:</b><br>
+            • 1W: <span style='color:{w_color};'>{w_struct}</span><br>
+            • 1D: <span style='color:{d_color};'>{d_struct}</span>
+        </div>
+        """
+
+    with cols_movers[0]:
+        st.subheader("📈 Top 3 Bullish Movers")
+        for mover in top_bullish:
+            color = 'lime' if mover['change_pct'] > 0 else 'salmon'
+            st.markdown(f"""
+            <div class='signal-card'>
+                **{mover['symbol']}**<br>
+                <span style='color:{color}; font-weight:bold;'>{mover['change_pct']:.2f}%</span> (24H)<br>
+                <p class='mover-price'>Harga: {format_price(mover['current_price'])}</p>
+                {get_mover_context(mover)}
+            </div>
+            """, unsafe_allow_html=True)
+
+    with cols_movers[1]:
+        st.subheader("📉 Top 3 Bearish Movers")
+        for mover in top_bearish:
+            color = 'salmon' if mover['change_pct'] < 0 else 'lime'
+            st.markdown(f"""
+            <div class='signal-card'>
+                **{mover['symbol']}**<br>
+                <span style='color:{color}; font-weight:bold;'>{mover['change_pct']:.2f}%</span> (24H)<br>
+                <p class='mover-price'>Harga: {format_price(mover['current_price'])}</p>
+                {get_mover_context(mover)}
+            </div>
+            """, unsafe_allow_html=True)
     
-    else:
-        st.error("Gagal memuat data harga yang cukup dari bursa untuk analisis. Koneksi Binance ke Streamlit Cloud mungkin tidak stabil.")
+    with cols_movers[2]:
+         st.subheader("ℹ️ Keterangan Konteks")
+         st.info("Koin ini memiliki pergerakan harga 24 jam tertinggi. Konteks Struktur 1W/1D menunjukkan bias jangka panjang dan menengah, yang dapat memvalidasi momentum pergerakan saat ini.")
 
 else:
-    # KASUS: SINYAL DITEMUKAN -> TAMPILKAN SINYAL RENDAH, SEDANG, TINGGI
-    
+    st.error("Gagal memuat data harga yang cukup dari bursa untuk analisis. Koneksi Binance ke Streamlit Cloud mungkin tidak stabil.")
+
+
+st.markdown("---") 
+
+# --- BAGIAN SINYAL TRADING (HANYA JIKA DITEMUKAN) ---
+
+if not found_trades:
+    st.warning("Tidak ada sinyal Trading (Tinggi/Sedang/Rendah) yang ditemukan berdasarkan kriteria Market Structure saat ini.")
+
+else:
     st.success(f"""
         ✅ Pemindaian selesai dalam **{total_time:.2f} detik**. 
         Ditemukan {total_signals} sinyal potensial dari {total_coins_scanned} koin.
@@ -463,7 +498,7 @@ else:
                     color = "lime" if "Bullish" in trade['bias'] else "salmon" if "Bearish" in trade['bias'] else "#5c7e8e"
 
                     st.markdown(f"**Konviksi:** <strong style='color:{color};'>{trade['conviction']} ({trade['bias']})</strong>", unsafe_allow_html=True)
-                    st.caption(f"Timeframe: {trade['timeframe']}")
+                    st.caption(f"Timeframe: {selected_tf}")
                     
                     display_report_details(trade)
 
@@ -502,7 +537,7 @@ else:
                     color = "lime" if "Bullish" in trade['bias'] else "salmon"
                     
                     st.markdown(f"**Sinyal:** <strong style='color:{color};'>{trade['bias']}</strong>", unsafe_allow_html=True)
-                    st.caption(f"Timeframe: {trade['timeframe']}")
+                    st.caption(f"Timeframe: {selected_tf}")
                     
                     st.markdown(f"**Entri Target:** <span class='entry'>{format_price(trade['entry'])}</span>", unsafe_allow_html=True)
                     st.markdown(f"SL ({abs(trade['sl_pct'])}%): {format_price(trade['sl_target'])}", unsafe_allow_html=True)
