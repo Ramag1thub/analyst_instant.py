@@ -1,6 +1,6 @@
 # File: analyst_instant.py
-# Versi: 25.0 - FINAL HARD RESET & 350 KOIN (Mencoba Ulang Skala Besar dengan Stabilitas Maksimal)
-# Tujuan: Kembali ke 350+ koin dengan teknik cache management dan sleep yang paling agresif.
+# Versi: 29.0 - FINAL HEALTH CHECK & STABILITAS (Top 35 Koin + Verifikasi Koneksi)
+# Tujuan: Menambahkan fungsi verifikasi koneksi API (Health Check) sebelum memindai data.
 
 import streamlit as st
 import pandas as pd
@@ -13,70 +13,35 @@ import json
 BINANCE_API_URL = "https://fapi.binance.com/fapi/v1/klines"
 REQUEST_TIMEOUT = 30 
 
-# --- DAFTAR KOIN BESAR (KEMBALI KE 350+ SIMBOL PERPETUAL USDT) ---
+# --- DAFTAR KOIN BLUE-CHIP (HANYA ~35 KOIN LIKUIDITAS TERTINGGI UNTUK STABILITAS) ---
 BASE_COIN_UNIVERSE = [
-    # Daftar Koin 350+ (KEMBALI KE DAFTAR LENGKAP)
-    'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'DOGE/USDT', 'BNB/USDT', 'ADA/USDT',
-    'AVAX/USDT', 'LINK/USDT', 'DOT/USDT', 'MATIC/USDT', 'SHIB/USDT', 'TRX/USDT', 'BCH/USDT',
-    'LTC/USDT', 'NEAR/USDT', 'UNI/USDT', 'ICP/USDT', 'PEPE/USDT', 'TON/USDT', 'KAS/USDT',
-    'INJ/USDT', 'RNDR/USDT', 'TIA/USDT', 'FET/USDT', 'WIF/USDT', 'ARB/USDT', 'OP/USDT',
-    'ETC/USDT', 'XLM/USDT', 'FIL/USDT', 'IMX/USDT', 'APT/USDT', 'FTM/USDT', 'SAND/USDT', 
-    'MANA/USDT', 'GRT/USDT', 'AAVE/USDT', 'ATOM/USDT', 'ZIL/USDT', 'ALGO/USDT', 'EGLD/USDT', 
-    'SUI/USDT', 'SEI/USDT', 'PYTH/USDT', 'GMT/USDT', 'ID/USDT', 'KNC/USDT', 'WLD/USDT', 
-    'MINA/USDT', 'DYDX/USDT', 'GALA/USDT', 'LDO/USDT', 'BTT/USDT', 'VET/USDT', 'OCEAN/USDT', 
-    'ROSE/USDT', 'EOS/USDT', 'FLOW/USDT', 'THETA/USDT', 'AXS/USDT', 'ENJ/USDT', 'CRV/USDT', 
-    'GMX/USDT', 'COMP/USDT', 'YFI/USDT', 'SNX/USDT', 'MKR/USDT', 'FXS/USDT', 'RUNE/USDT', 
-    'ZEC/USDT', 'BAT/USDT', '1INCH/USDT', 'CELO/USDT', 'ZRX/USDT', 'ONT/USDT', 'DASH/USDT', 
-    'CVC/USDT', 'NEO/USDT', 'QTUM/USDT', 'ICX/USDT', 'WAVES/USDT', 'DCR/USDT', 'OMG/USDT', 
-    'BAND/USDT', 'BEL/USDT', 'CHZ/USDT', 'HBAR/USDT', 'IOTX/USDT', 'ZEN/USDT',
-    'PERP/USDT', 'RLC/USDT', 'CTXC/USDT', 'BAKE/USDT', 'KAVA/USDT', 'CELR/USDT', 'RVN/USDT', 
-    'TLM/USDT', 'TFUEL/USDT', 'STX/USDT', 'JASMY/USDT', 'GLMR/USDT', 'MASK/USDT', 'DODO/USDT', 
-    'ASTR/USDT', 'ACH/USDT', 'AGIX/USDT', 'SPELL/USDT', 'WOO/USDT', 'VELO/USDT',
-    'FLOKI/USDT', 'BONK/USDT', '1000PEPE/USDT', 'MEME/USDT', 
-    'PENGU/USDT', 'TRUMP/USDT', 'FART/USDT', 'TOSHI/USDT', 'BOME/USDT',
-    'ARKM/USDT', 'TAO/USDT', 'AKT/USDT', 'NMT/USDT', 'OLAS/USDT', 'CQT/USDT', 
-    'PHB/USDT', 'OPSEC/USDT', 'GLM/USDT', 'SEILOR/USDT', 
-    'METIS/USDT', 'STRK/USDT', 'ZETA/USDT', 'ALT/USDT', 'LSK/USDT', 'BEAM/USDT', 'AEVO/USDT', 
-    'CKB/USDT', 'SSV/USDT', 'MAVIA/USDT', 'JTO/USDT', 'BLUR/USDT', 'SC/USDT', 'CFX/USDT', 
-    'FLR/USDT', 'MOVR/USDT', 'GNS/USDT', 'HIGH/USDT', 'MAGIC/USDT', 'RDNT/USDT', 'LEVER/USDT', 
-    'CTSI/USDT', 'VRA/USDT', 'POLS/USDT', 'XEC/USDT', 'KLAY/USDT', 'WEMIX/USDT', 'API3/USDT', 
-    'CHESS/USDT', 'SKL/USDT', 'STMX/USDT', 'ONG/USDT', 'ARPA/USDT', 'HFT/USDT', 
-    'PENDLE/USDT', 'GTC/USDT', 'EDU/USDT', 'YGG/USDT', 'LINA/USDT', 'MC/USDT', 'C98/USDT', 
-    'ZRO/USDT', 'AITECH/USDT', 'PRIME/USDT', 'MANTLE/USDT',
-    'GAL/USDT', 'NMR/USDT', 'SFP/USDT', 'TOMO/USDT', 'SYS/USDT', 'WAXP/USDT', 'PHA/USDT', 
-    'ALICE/USDT', 'DUSK/USDT', 'ILV/USDT', 'RSR/USDT', 'T/USDT', 'RIF/USDT', 'BADGER/USDT', 
-    'KP3R/USDT', 'DAR/USDT', 'CPOOL/USDT', 'AUCTION/USDT', 'ZKS/USDT', 'XVS/USDT', 'NKN/USDT', 
-    'MDT/USDT', 'PROS/USDT', 'TRU/USDT', 'REI/USDT', 'DATA/USDT', 'KEY/USDT', 'LOOM/USDT', 
-    'HIFI/USDT', 'LRC/USDT', 'ZBC/USDT', 'HYPE/USDT', 'ASTER/USDT', 'USELESS/USDT', 
-    'LAUNCHCOIN/USDT', 'AERGO/USDT', 'AKRO/USDT', 'ALPHA/USDT', 'ANKR/USDT', 'ATA/USDT', 
-    'BAL/USDT', 'BICO/USDT', 'BLZ/USDT', 'BNX/USDT', 'CLV/USDT', 'COTI/USDT', 'DENT/USDT', 
-    'DGB/USDT', 'DMTR/USDT', 'DREP/USDT', 'ELF/USDT', 'EPS/USDT', 'ERTHA/USDT', 
-    'FIS/USDT', 'FORTH/USDT', 'GHST/USDT', 'HARD/USDT', 
-    'HNT/USDT', 'HOT/USDT', 'IDEX/USDT', 'IOST/USDT', 'IOTA/USDT', 'IRIS/USDT', 'LUNA/USDT', 
-    'MBOX/USDT', 'MITH/USDT', 'MTL/USDT', 'NULS/USDT', 
-    'ONE/USDT', 'OXT/USDT', 'PERL/USDT', 'PUNDIX/USDT', 'QLC/USDT', 
-    'QUICK/USDT', 'RAY/USDT', 'REEF/USDT', 'REN/USDT', 'REQ/USDT', 'RVN/USDT', 'SOLO/USDT', 
-    'SOS/USDT', 'STEEM/USDT', 'STG/USDT', 'STORJ/USDT', 'SUN/USDT', 'SUSHI/USDT', 'T/USDT', 
-    'TOMO/USDT', 'TRB/USDT', 'TUSD/USDT', 'UTK/USDT', 'VIB/USDT', 
-    'WAN/USDT', 'XEM/USDT', 'XYO/USDT', '1000SHIB/USDT',
-    'UMA/USDT', 'LRC/USDT', 'AXS/USDT', 'BAT/USDT', 
-    'CHZ/USDT', 'DODO/USDT', 'GALA/USDT', 'GRT/USDT', 'MKR/USDT', 'NEO/USDT', 
-    'ONT/USDT', 'QTUM/USDT', 'SFP/USDT', 'SUSHI/USDT', 'THETA/USDT',
-    'UNI/USDT', 'VET/USDT', 'XLM/USDT', 'ZIL/USDT', 'ZRX/USDT', 'BNX/USDT',
-    'FTT/USDT', 'GMT/USDT', 'LDO/USDT',
-    'PEPE/USDT', 'SEI/USDT', 'TIA/USDT', 'WLD/USDT', 'XVS/USDT', 'YFI/USDT', 'ZEC/USDT', 'ZRX/USDT', 
-    'AIOZ/USDT', 'ALICE/USDT', 'ANKR/USDT', 'APENFT/USDT', 'API3/USDT', 'ARPA/USDT',
-    'AUCTION/USDT', 'BSW/USDT', 'C98/USDT', 'CELR/USDT', 'CTK/USDT', 'DREP/USDT',
-    'FIS/USDT', 'FLM/USDT', 'FLOW/USDT', 'GTC/USDT', 'HBAR/USDT',
-    'IDEX/USDT', 'IOST/USDT', 'IOTA/USDT', 'IRIS/USDT', 'LUNA/USDT', 'LPT/USDT', 'LTO/USDT',
-    'NANO/USDT', 'OXT/USDT', 'PAXG/USDT', 'PHB/USDT', 'PUNDIX/USDT', 'QNT/USDT',
-    'RAY/USDT', 'RIF/USDT', 'RLC/USDT', 'RSR/USDT', 'RUNE/USDT', 'SXP/USDT', 'T/USDT',
-    'TRB/USDT', 'TRU/USDT', 'TUSD/USDT', 'UMA/USDT', 'UNFI/USDT', 'UTK/USDT', 'VIB/USDT', 'WEMIX/USDT', 'XYO/USDT', 'ZKS/USDT', 'ZRO/USDT'
+    'BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'XRP/USDT', 'ADA/USDT', 'DOGE/USDT',
+    'DOT/USDT', 'MATIC/USDT', 'LTC/USDT', 'BCH/USDT', 'LINK/USDT', 'AVAX/USDT', 'UNI/USDT',
+    'XLM/USDT', 'ETC/USDT', 'ALGO/USDT', 'ATOM/USDT', 'FIL/USDT', 'EGLD/USDT', 'TRX/USDT',
+    'AAVE/USDT', 'COMP/USDT', 'MKR/USDT', 'YFI/USDT', 'DYDX/USDT', 'SUI/USDT', 'SEI/USDT',
+    'APT/USDT', 'IMX/USDT', 'ARB/USDT', 'OP/USDT', 'RNDR/USDT', 'TIA/USDT', 'FET/USDT'
 ]
 
 # --- DEKLARASI GLOBAL ---
 total_coins_scanned = len(BASE_COIN_UNIVERSE)
 
+# --- FUNGSI HEALTH CHECK API BINANCE ---
+@st.cache_data(ttl=60)
+def binance_health_check():
+    """Memeriksa koneksi API dengan mengambil data BTC. Mengembalikan True jika berhasil."""
+    try:
+        symbol_id = 'BTCUSDT'
+        params = {'symbol': symbol_id, 'interval': '1m', 'limit': 1}
+        response = requests.get(BINANCE_API_URL, params=params, timeout=5) # Timeout singkat
+        response.raise_for_status()
+        bars = response.json()
+        if bars and len(bars) > 0:
+            return True
+        return False
+    except requests.exceptions.RequestException:
+        return False
+    except Exception:
+        return False
 # --- PENGATURAN HALAMAN & KONFIGURASI AWAL ---
 st.set_page_config(layout="wide", page_title="Instant AI Analyst", initial_sidebar_state="collapsed")
 
@@ -100,10 +65,9 @@ INSTANT_CSS = """
 """
 st.markdown(INSTANT_CSS, unsafe_allow_html=True)
 
+
 # --- FUNGSI UTAMA (SINKRON - MENGGUNAKAN REQUESTS) ---
 
-# PERUBAHAN: menggunakan show_spinner=True agar lebih jelas saat memuat
-# PERUBAHAN: ttl=60 (hanya 1 menit) agar data lebih fresh
 @st.cache_data(show_spinner=True, ttl=60) 
 def fetch_daily_data(symbol, days=7): # Mengambil data HANYA 7 HARI untuk beban API yang sangat ringan
     """Mengambil data harian SINKRON dari BINANCE FUTURES API (requests)."""
@@ -147,7 +111,8 @@ def fetch_daily_data(symbol, days=7): # Mengambil data HANYA 7 HARI untuk beban 
 @st.cache_data(show_spinner=False)
 def analyze_structure(df):
     """Analisis struktur dan mengembalikan status lengkap."""
-    if df is None or len(df) < 20: 
+    # Kriteria 7 bar tetap dipertahankan untuk analisis struktur minimum
+    if df is None or len(df) < 7: 
         return {'structure': 'Data Tidak Cukup', 'current_price': None, 'fib_bias': 'Netral', 'high': None, 'low': None, 'proxy_low': None, 'proxy_high': None, 'change_pct': 0.0}
 
     structure = "Konsolidasi"
@@ -198,7 +163,6 @@ def find_signal_resampled(symbol, user_timeframe):
     df_daily = fetch_daily_data(symbol) 
     
     if df_daily is None: 
-        # Error: Koneksi gagal total
         return {'symbol': symbol, 'conviction': 'Error', 'change_pct': 0.0, 'current_price': None}
 
     resample_rules = {'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'}
@@ -209,7 +173,6 @@ def find_signal_resampled(symbol, user_timeframe):
     
     # Cek minimal data untuk analisis struktur dan resample (minimal 7 hari)
     if len(df_daily) < 7: 
-        # Nihil: Data tidak cukup untuk analisis yang mendalam, tetapi data mover tersedia
         return {'symbol': symbol, 'conviction': 'Nihil', 'change_pct': change_pct, 'current_price': current_price,
                 'report_w_structure': analysis_d.get('structure'), 
                 'report_d_structure': analysis_d.get('structure')}
@@ -217,10 +180,9 @@ def find_signal_resampled(symbol, user_timeframe):
 
     try:
         
-        # PERUBAHAN: kita hanya punya data 7 hari, jadi kita tidak bisa resample Weekly (1W) dengan andal
         df_w = df_daily.resample('W').agg(resample_rules).dropna()
-        analysis_w = analyze_structure(df_w) # Ini akan sering mengembalikan 'Data Tidak Cukup'
-
+        analysis_w = analyze_structure(df_w)
+        
         if user_timeframe == '1d':
             analysis_user = analysis_d
         else:
@@ -242,9 +204,9 @@ def find_signal_resampled(symbol, user_timeframe):
     entry_price = current_price 
     sl_pct = 0; tp1_pct = 0; tp2_pct = 0
     
-    # --- LOGIKA KONVIKSI & PENETAPAN ENTRY SMART MONEY (Disesuaikan untuk Data 7 Hari) ---
+    # --- LOGIKA KONVIKSI & PENETAPAN ENTRY SMART MONEY (DILONGGARKAN) ---
     
-    # 1. KRITERIA TINGGI (Sulit dicapai dengan data 7 hari, tapi tetap dipertahankan)
+    # 1. KRITERIA TINGGI (Paling ketat)
     if structure_w == 'Bullish' and structure_d == 'Bullish' and structure_user == 'Bullish' and fib_bias_d == 'Bullish': 
         conviction = "Tinggi"; bias = "Bullish Kuat"; tp1_pct = 5; tp2_pct = 10; sl_pct = 2.5 
         entry_price = proxy_low 
@@ -253,20 +215,21 @@ def find_signal_resampled(symbol, user_timeframe):
         entry_price = proxy_high
     
     # 2. KRITERIA SEDANG
-    elif structure_d == 'Bullish' and structure_user == 'Bullish': 
-        conviction = "Sedang"; bias = "Cenderung Bullish"; tp1_pct = 3; tp2_pct = 7; sl_pct = 1.0 
+    elif structure_d == 'Bullish' or structure_user == 'Bullish': 
+        conviction = "Sedang"; bias = "Cenderung Bullish"
+        tp1_pct = 3; tp2_pct = 7; sl_pct = 1.0 
         entry_price = proxy_low * 1.002
-    elif structure_d == 'Bearish' and structure_user == 'Bearish': 
-        conviction = "Sedang"; bias = "Cenderung Bearish"; tp1_pct = -3; tp2_pct = -7; sl_pct = -1.0 
+    elif structure_d == 'Bearish' or structure_user == 'Bearish': 
+        conviction = "Sedang"; bias = "Cenderung Bearish"
+        tp1_pct = -3; tp2_pct = -7; sl_pct = -1.0 
         entry_price = proxy_high * 0.998
     
-    # 3. KRITERIA RENDAH (Standar Diperlonggar)
-    # Ini harus lolos jika ada tren di timeframe manapun yang berhasil dihitung
-    elif structure_user == 'Bullish' or structure_d == 'Bullish': # Mengabaikan 1W karena data 7 hari
+    # 3. KRITERIA RENDAH (FINAL LONGGAR V27.0)
+    elif structure_user == 'Bullish' or structure_d == 'Bullish' or structure_w == 'Bullish':
         conviction = "Rendah"; bias = "Bullish Potensial"
         tp1_pct = 2; tp2_pct = 4; sl_pct = 1.0 
         entry_price = proxy_low * 1.005 
-    elif structure_user == 'Bearish' or structure_d == 'Bearish': # Mengabaikan 1W
+    elif structure_user == 'Bearish' or structure_d == 'Bearish' or structure_w == 'Bearish':
         conviction = "Rendah"; bias = "Bearish Potensial"
         tp1_pct = -2; tp2_pct = -4; sl_pct = -1.0 
         entry_price = proxy_high * 0.995 
@@ -314,22 +277,40 @@ def run_scanner_streamed_sync(coin_universe, timeframe, status_placeholder):
         if result:
             all_results.append(result)
         
-        # PERUBAHAN: Jeda sedikit lebih lama untuk 350+ koin
-        time.sleep(0.07) # Jeda 70ms per koin (maks 14 request/detik)
+        # Jeda 50ms per koin (maks 20 request/detik) 
+        time.sleep(0.05) 
         
-        if i % 20 == 0 or i == total_coins_scanned - 1:
+        if i % 5 == 0 or i == total_coins_scanned - 1: # Update status lebih sering karena koin lebih sedikit
             found_signals = len([r for r in all_results if r.get('conviction') not in ['Nihil', 'Error']])
             status_placeholder.info(f"Memindai {symbol}... Koin ke {i+1} dari {total_coins_scanned}. Ditemukan {found_signals} sinyal trading.")
             
     return all_results
 
+# --- EKSEKUSI: HEALTH CHECK ---
+is_connected = binance_health_check()
+
+if not is_connected:
+    st.error("🔴 **KONEKSI GAGAL TOTAL:** Gagal terhubung ke Binance API (BTC/USDT Health Check).")
+    st.warning("Silakan coba tombol **Scan Ulang Sekarang** di bawah, atau periksa status API Binance di luar Streamlit Cloud. Proses pemindaian tidak dilanjutkan.")
+    
+    col1, col2 = st.columns([1.5, 8.5])
+    if col1.button("🔄 Scan Ulang Sekarang (API Check)"):
+        st.cache_data.clear() 
+        st.rerun() 
+    st.stop()
+    
+# Jika terhubung, lanjutkan ke UI dan Pemindaian
+st.success("🟢 **KONEKSI API BERHASIL:** Binance API Health Check (BTC/USDT) berhasil. Melanjutkan pemindaian.")
+
+
 # --- ANTARMUKA APLIKASI WEB ---
 st.title("🚀 Instant AI Signal Dashboard")
-st.caption(f"Menganalisis **{total_coins_scanned}+ koin Futures** (Binance API) dengan **Smart Money Entry**.")
+st.caption(f"Menganalisis **{total_coins_scanned} koin Blue-Chip (Fokus Kualitas)** dengan **Smart Money Entry**.")
 
 col1, col2, col3 = st.columns([1.5, 1.5, 7])
 selected_tf = col1.selectbox("Pilih Timeframe Sinyal:", ['1d', '4h', '1h'], help="Pilih Timeframe sinyal yang diinginkan.")
-if col2.button("🔄 Scan Ulang Sekarang"):
+# Tombol Scan Ulang telah dipindahkan ke atas dalam blok error untuk akses mudah
+if col2.button("🔄 Scan Ulang Sekarang (Data Penuh)"):
     st.cache_data.clear() 
     st.rerun() 
 st.markdown("---")
@@ -400,6 +381,7 @@ signal_percentage = (total_signals / total_coins_scanned) * 100 if total_coins_s
 
 # --- BAGIAN REPORT MOVER (SELALU TAMPIL) ---
 st.header("⚡ Laporan Koin Penggerak (24 Jam) - Top Movers")
+st.caption("Analisis ini hanya mencakup koin Blue-Chip teratas untuk stabilitas data.")
 
 # Kumpulkan semua hasil YANG SEHAT: current_price ada, change_pct != 0, DAN bukan error
 movers = [r for r in all_results if r.get('current_price') is not None and r.get('change_pct') != 0.0 and r.get('conviction') != 'Error']
@@ -464,7 +446,7 @@ if movers:
          st.info("Koin ini memiliki pergerakan harga 24 jam tertinggi. Konteks Struktur 1W/1D menunjukkan bias jangka panjang dan menengah, yang dapat memvalidasi momentum pergerakan saat ini.")
 
 else:
-    st.error(f"Gagal memuat data harga dari {total_coins_scanned} koin. Koneksi Binance API saat ini tidak stabil atau mengalami kendala Rate Limit yang parah.")
+    st.error(f"Gagal memuat data harga dari {total_coins_scanned} koin. Data koin tidak cukup untuk analisis. Silakan coba 'Scan Ulang Sekarang'.")
 
 
 st.markdown("---") 
