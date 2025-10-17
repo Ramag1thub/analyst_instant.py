@@ -1,6 +1,6 @@
 # File: analyst_instant.py
-# Versi: 21.1 - FINAL STABILITAS REPORTING (Menghitung 24H Mover Secara Lokal)
-# Tujuan: Menghilangkan kegagalan pada API kedua (BINANCE_TICKER_API_URL) dengan menggunakan data candlestick yang sudah sukses diambil.
+# Versi: 21.2 - FINAL STABILITAS (Fix NameError dan Logika Reporting)
+# Tujuan: Memperbaiki NameError: total_coins_scanned, dan memastikan semua fitur berjalan stabil.
 
 import streamlit as st
 import pandas as pd
@@ -74,6 +74,9 @@ BASE_COIN_UNIVERSE = [
     'TRB/USDT', 'TRU/USDT', 'TUSD/USDT', 'UMA/USDT', 'UNFI/USDT', 'UTK/USDT', 'VIB/USDT', 'WEMIX/USDT', 'XYO/USDT', 'ZKS/USDT', 'ZRO/USDT'
 ]
 
+# --- DEKLARASI GLOBAL (FIX NameError) ---
+total_coins_scanned = len(BASE_COIN_UNIVERSE)
+
 # --- PENGATURAN HALAMAN & KONFIGURASI AWAL ---
 st.set_page_config(layout="wide", page_title="Instant AI Analyst", initial_sidebar_state="collapsed")
 
@@ -133,7 +136,6 @@ def fetch_daily_data(symbol, days=365):
             df.set_index('timestamp', inplace=True)
             
     except requests.exceptions.RequestException:
-        # Menangkap error koneksi
         return None
     except Exception:
         pass
@@ -150,7 +152,7 @@ def analyze_structure(df):
     current_close = df['Close'].iloc[-1]
     df_recent = df[['High', 'Low']].tail(14)
 
-    # Logika Market Structure (sama)
+    # Logika Market Structure 
     if len(df_recent) >= 14:
         recent_highs = df_recent['High'].rolling(window=5, center=True).max().dropna()
         recent_lows = df_recent['Low'].rolling(window=5, center=True).min().dropna()
@@ -160,7 +162,7 @@ def analyze_structure(df):
             if high_h and low_h: structure = "Bullish"
             elif recent_highs.iloc[-1] < recent_highs.iloc[-2] and recent_lows.iloc[-1] < recent_lows.iloc[-2]: structure = "Bearish"
 
-    # Logika Fibonacci (sama)
+    # Logika Fibonacci 
     max_price = df['High'].max(); min_price = df['Low'].min(); diff = max_price - min_price
     fib_level = {}
     for level in [0.236, 0.382, 0.5, 0.618, 0.786]:
@@ -173,9 +175,9 @@ def analyze_structure(df):
     # Logika Perubahan 24H (FallBack Data Mover)
     change_pct = 0.0
     if len(df) >= 2:
-        # Perubahan dari harga penutupan 2 hari lalu (sekitar 24 jam)
         close_24h_ago = df['Close'].iloc[-2]
-        change_pct = ((current_close - close_24h_ago) / close_24h_ago) * 100
+        if close_24h_ago != 0:
+             change_pct = ((current_close - close_24h_ago) / close_24h_ago) * 100
         
     return {
         'structure': structure, 
@@ -185,7 +187,7 @@ def analyze_structure(df):
         'low': df['Low'].min(),
         'proxy_low': df['Low'].iloc[-14:].min() if len(df) >= 14 else current_close,
         'proxy_high': df['High'].iloc[-14:].max() if len(df) >= 14 else current_close,
-        'change_pct': change_pct # Nilai perubahan 24H
+        'change_pct': change_pct 
     }
 
 def find_signal_resampled(symbol, user_timeframe):
@@ -194,12 +196,12 @@ def find_signal_resampled(symbol, user_timeframe):
     df_daily = fetch_daily_data(symbol) 
     
     if df_daily is None: 
-        # Jika fetch data harian gagal (koneksi/API), kembalikan data minimal untuk movers (walaupun movers tidak akan dijalankan di sini)
         return {'symbol': symbol, 'conviction': 'Error', 'change_pct': 0.0, 'current_price': None}
 
-
     resample_rules = {'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'}
-    if len(df_daily) < 7: return {'symbol': symbol, 'conviction': 'Error', 'change_pct': 0.0, 'current_price': df_daily['Close'].iloc[-1] if df_daily is not None and len(df_daily)>0 else None}
+    if len(df_daily) < 7: 
+        current_price = df_daily['Close'].iloc[-1] if len(df_daily)>0 else None
+        return {'symbol': symbol, 'conviction': 'Error', 'change_pct': 0.0, 'current_price': current_price}
 
 
     try:
@@ -215,7 +217,9 @@ def find_signal_resampled(symbol, user_timeframe):
             analysis_user = analyze_structure(df_user)
             
     except Exception:
-        return {'symbol': symbol, 'conviction': 'Error', 'change_pct': 0.0, 'current_price': analysis_d['current_price']} # Return minimal data
+        current_price = analysis_d.get('current_price')
+        change_pct = analysis_d.get('change_pct', 0.0)
+        return {'symbol': symbol, 'conviction': 'Error', 'change_pct': change_pct, 'current_price': current_price} 
 
     # Mengambil Status Struktur dan Data Proksi
     structure_w = analysis_w['structure']; structure_d = analysis_d['structure']; structure_user = analysis_user['structure']
@@ -258,6 +262,7 @@ def find_signal_resampled(symbol, user_timeframe):
         # Hitung ulang SL, TP, dan RR
         sl_multiplier = 1 + (sl_pct / 100) if sl_pct >= 0 else 1 - abs(sl_pct / 100)
         sl_target = entry_price * sl_multiplier
+        
         tp1_target = entry_price * (1 + (tp1_pct / 100))
         tp2_target = entry_price * (1 + (tp2_pct / 100))
         
@@ -294,16 +299,15 @@ def run_scanner_streamed_sync(coin_universe, timeframe, status_placeholder):
         if result:
             all_results.append(result)
         
-        if i % 20 == 0 or i == len(coin_universe) - 1:
-            # Update status menggunakan jumlah total yang diproses (termasuk yang Nihil/Error)
+        if i % 20 == 0 or i == total_coins_scanned - 1:
             found_signals = len([r for r in all_results if r.get('conviction') not in ['Nihil', 'Error']])
-            status_placeholder.info(f"Memindai {symbol}... Koin ke {i+1} dari {len(coin_universe)}. Ditemukan {found_signals} sinyal trading.")
+            status_placeholder.info(f"Memindai {symbol}... Koin ke {i+1} dari {total_coins_scanned}. Ditemukan {found_signals} sinyal trading.")
             
     return all_results
 
 # --- ANTARMUKA APLIKASI WEB ---
 st.title("🚀 Instant AI Signal Dashboard")
-st.caption(f"Menganalisis {len(BASE_COIN_UNIVERSE)}+ koin **FUTURES** (Binance API) dengan **Smart Money Entry**.")
+st.caption(f"Menganalisis {total_coins_scanned}+ koin **FUTURES** (Binance API) dengan **Smart Money Entry**.")
 
 col1, col2, col3 = st.columns([1.5, 1.5, 7])
 selected_tf = col1.selectbox("Pilih Timeframe Sinyal:", ['1d', '4h', '1h'], help="Pilih Timeframe sinyal yang diinginkan.")
@@ -318,12 +322,12 @@ start_time = time.time()
 
 # --- PROSES PEMINDAIAN UTAMA (SINKRON) ---
 
-status_placeholder.info(f"Memulai pemindaian instan untuk **{len(BASE_COIN_UNIVERSE)} koin** secara berurutan...")
+status_placeholder.info(f"Memulai pemindaian instan untuk **{total_coins_scanned} koin** secara berurutan...")
 
 all_results = run_scanner_streamed_sync(BASE_COIN_UNIVERSE, selected_tf, status_placeholder)
 total_time = time.time() - start_time
 
-# --- FUNGSI DISPLAY PEMBANTU (SAMA SEPERTI V20.0) ---
+# --- FUNGSI DISPLAY PEMBANTU ---
 def format_price(price):
     if price is None: return "N/A"
     if price < 0.001: return f"{price:,.8f}"
@@ -378,12 +382,12 @@ signal_percentage = (total_signals / total_coins_scanned) * 100 if total_coins_s
 
 if not found_trades:
     
-    # KASUS KRITIS: SINYAL NIHIL -> TAMPILKAN TOP & BOTTOM MOVERS
+    # KASUS KRITIS: SINYAL NIHIL -> TAMPILKAN TOP & BOTTOM MOVERS (MENGGUNAKAN FALLBACK)
     st.warning(f"⚠️ Pemindaian selesai dalam **{total_time:.2f} detik**. Tidak ditemukan sinyal *Market Structure* yang kuat saat ini.")
     st.header("⚡ Laporan Koin Penggerak (24 Jam) - Alternatif Trading")
     
-    # Kumpulkan semua hasil (termasuk yang Nihil) yang memiliki data harga
-    movers = [r for r in all_results if r.get('current_price') is not None]
+    # Kumpulkan semua hasil (termasuk yang Nihil) yang memiliki data harga dan persentase
+    movers = [r for r in all_results if r.get('current_price') is not None and r.get('conviction') != 'Error']
 
     if movers:
         # Sortir menggunakan data perubahan 24 jam yang dihitung secara lokal
