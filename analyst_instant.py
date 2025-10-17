@@ -1,19 +1,17 @@
 # File: analyst_instant.py
-# Versi: 16.3 - FINAL STABILITAS (Menggunakan Binance USD-M Futures)
-# Tujuan: Stabilitas maksimum, mengatasi semua error, dan mendapatkan data Perpetual Futures yang luas.
+# Versi: 18.0 - SOLUSI ANTI-ERROR (Mengganti CCXT dengan Requests Sederhana)
+# Tujuan: Menghilangkan error instalasi dengan menggunakan library Python standar (requests).
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 import time
+import requests
+import json
 
-# --- PENTING: Menggunakan CCXT Sinkron ---
-try:
-    import ccxt 
-except ImportError:
-    st.error("FATAL ERROR: Gagal mengimpor ccxt. Mohon periksa requirements.txt (hanya ccxt, pandas, numpy, streamlit).")
-    st.stop()
-
+# --- PENTING: PENGGUNAAN API PUBLIK BINANCE FUTURES ---
+# Base URL untuk mengambil data OHLCV (candlestick) dari Binance Futures
+BINANCE_API_URL = "https://fapi.binance.com/fapi/v1/klines"
 
 # --- DAFTAR KOIN DASAR (350+ SIMBOL PERPETUAL USDT) ---
 BASE_COIN_UNIVERSE = [
@@ -79,7 +77,7 @@ BASE_COIN_UNIVERSE = [
 # --- PENGATURAN HALAMAN & KONFIGURASI AWAL ---
 st.set_page_config(layout="wide", page_title="Instant AI Analyst", initial_sidebar_state="collapsed")
 
-# --- UI/UX CSS ---
+# --- UI/UX CSS (Sama) ---
 INSTANT_CSS = """
 <style>
     .stApp { background-color: #151515; color: #d1d1d1; font-family: 'Helvetica Neue', Arial, sans-serif; font-size: 14px; }
@@ -96,36 +94,53 @@ INSTANT_CSS = """
 """
 st.markdown(INSTANT_CSS, unsafe_allow_html=True)
 
-# --- FUNGSI UTAMA (SINKRON) ---
+# --- FUNGSI UTAMA (SINKRON - MENGGUNAKAN REQUESTS) ---
 
 @st.cache_data(show_spinner=False, ttl=3600)
 def fetch_daily_data(symbol, days=365):
-    """Mengambil data harian SINKRON dari BINANCE FUTURES (Mode Stabilitas Tinggi)."""
+    """Mengambil data harian SINKRON dari BINANCE FUTURES API (requests)."""
     
-    # PERUBAHAN KRITIS: Menggunakan Binanceusdm untuk Futures yang lebih stabil
-    exchange = ccxt.binanceusdm({ 
-        'options': {'defaultType': 'future'},
-        'timeout': 15000 
-    }) 
+    # Konversi simbol ke format Binance
+    symbol_id = symbol.replace('/', '') 
+    
+    # Hitung waktu 'since' (Sekitar 365 hari yang lalu)
+    end_time_ms = int(time.time() * 1000)
+    start_time_ms = end_time_ms - 86400000 * days
+
+    params = {
+        'symbol': symbol_id,
+        'interval': '1d',
+        'startTime': start_time_ms,
+        'limit': 1000 # Maksimum bar per request
+    }
     
     df = None
     try:
-        since = exchange.milliseconds() - 86400000 * days
-        # Tipe pasar diatur di konfigurasi, jadi panggil fetch_ohlcv standar
-        bars = exchange.fetch_ohlcv(symbol, '1d', since=since) 
-        if bars:
-            df = pd.DataFrame(bars, columns=['timestamp', 'Open', 'High', 'Low', 'Close', 'Volume'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        response = requests.get(BINANCE_API_URL, params=params, timeout=15)
+        response.raise_for_status() # Cek kode status HTTP untuk error
+        
+        bars = response.json()
+        
+        if bars and len(bars) > 0:
+            df = pd.DataFrame(bars, columns=[
+                'timestamp', 'Open', 'High', 'Low', 'Close', 'Volume', 
+                'CloseTime', 'QuoteVolume', 'TradeCount', 'TakerBuyBase', 
+                'TakerBuyQuote', 'Ignore'
+            ])
+            # Kolom 0 adalah timestamp (ms)
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms') 
+            df = df.astype({'Open': float, 'High': float, 'Low': float, 'Close': float, 'Volume': float})
             df.set_index('timestamp', inplace=True)
             
-            if df.index.tz is not None:
-                df.index = df.index.tz_localize(None)
-                
+    except requests.exceptions.HTTPError as e:
+        # Menangani Not Found (404) atau error API lainnya
+        if "404" not in str(e) and "400" not in str(e):
+             print(f"HTTP Error for {symbol}: {e}")
+        pass
     except Exception as e:
-        # Koin yang tidak ditemukan di Binance Futures akan diabaikan
-        pass 
-    finally:
-        exchange.close()
+        # Menangani JSON decode error atau koneksi timeout
+        pass
+        
     return df
 
 @st.cache_data(show_spinner=False)
@@ -243,7 +258,7 @@ def run_scanner_streamed_sync(coin_universe, timeframe, status_placeholder):
 
 # --- ANTARMUKA APLIKASI WEB ---
 st.title("🚀 Instant AI Signal Dashboard")
-st.caption(f"Menganalisis {len(BASE_COIN_UNIVERSE)}+ koin **FUTURES** (Binance USD-M) secara **SINKRON**.")
+st.caption(f"Menganalisis {len(BASE_COIN_UNIVERSE)}+ koin **FUTURES** (Binance API) secara **SINKRON** (Mode Paling Stabil).")
 
 col1, col2, col3 = st.columns([1.5, 1.5, 7])
 selected_tf = col1.selectbox("Pilih Timeframe Sinyal:", ['1d', '4h', '1h'], help="Pilih Timeframe sinyal yang diinginkan.")
@@ -309,7 +324,7 @@ else:
         for i, trade in enumerate(top_3_signals):
             with cols_top[i]:
                 with st.container(border=True):
-                    st.markdown(f"**#{i+1}: {trade['symbol']}**", unsafe_allow_html=True) 
+                    st.markdown(f"**#{i+1}: {trade['symbol']}:**", unsafe_allow_html=True) 
                     color = "lime" if "Bullish" in trade['bias'] else "salmon"
                     is_bullish = "Bullish" in trade['bias']
 
