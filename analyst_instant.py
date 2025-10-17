@@ -1,6 +1,6 @@
 # File: analyst_instant.py
-# Versi: 21.3 - FINAL STABILITAS JARINGAN (Menambahkan Time.Sleep Anti-Rate Limit)
-# Tujuan: Memperbaiki kegagalan koneksi massal dengan menambahkan jeda 50ms per koin untuk menghindari Rate Limit Binance.
+# Versi: 21.4 - FINAL FILTER MOVER (Memastikan Top Mover Hanya Koin Sehat)
+# Tujuan: Memastikan filter Mover Report hanya menampilkan koin yang datanya berhasil dianalisis change_pct-nya.
 
 import streamlit as st
 import pandas as pd
@@ -136,7 +136,6 @@ def fetch_daily_data(symbol, days=365):
             df.set_index('timestamp', inplace=True)
             
     except requests.exceptions.RequestException:
-        # Menangkap error koneksi (termasuk timeout dan rate limit jika response status error)
         return None
     except Exception:
         pass
@@ -200,13 +199,17 @@ def find_signal_resampled(symbol, user_timeframe):
         return {'symbol': symbol, 'conviction': 'Error', 'change_pct': 0.0, 'current_price': None}
 
     resample_rules = {'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'}
+    
+    analysis_d = analyze_structure(df_daily)
+    current_price = analysis_d.get('current_price')
+    change_pct = analysis_d.get('change_pct', 0.0)
+    
+    # Cek minimal data untuk analisis struktur dan resample (minimal 7 hari)
     if len(df_daily) < 7: 
-        current_price = df_daily['Close'].iloc[-1] if len(df_daily)>0 else None
-        return {'symbol': symbol, 'conviction': 'Error', 'change_pct': 0.0, 'current_price': current_price}
+        return {'symbol': symbol, 'conviction': 'Nihil', 'change_pct': change_pct, 'current_price': current_price}
 
 
     try:
-        analysis_d = analyze_structure(df_daily)
         
         df_w = df_daily.resample('W').agg(resample_rules).dropna()
         analysis_w = analyze_structure(df_w)
@@ -218,16 +221,14 @@ def find_signal_resampled(symbol, user_timeframe):
             analysis_user = analyze_structure(df_user)
             
     except Exception:
-        current_price = analysis_d.get('current_price')
-        change_pct = analysis_d.get('change_pct', 0.0)
-        return {'symbol': symbol, 'conviction': 'Error', 'change_pct': change_pct, 'current_price': current_price} 
+        # Jika resampling gagal (data tidak cukup untuk TF lebih tinggi dari D1), tetap return data mover
+        return {'symbol': symbol, 'conviction': 'Nihil', 'change_pct': change_pct, 'current_price': current_price} 
 
     # Mengambil Status Struktur dan Data Proksi
     structure_w = analysis_w['structure']; structure_d = analysis_d['structure']; structure_user = analysis_user['structure']
-    fib_bias_d = analysis_d['fib_bias']; current_price = analysis_d['current_price']
+    fib_bias_d = analysis_d['fib_bias']; 
     proxy_low = analysis_d['proxy_low']
     proxy_high = analysis_d['proxy_high']
-    change_pct = analysis_d['change_pct']
     
     conviction = "Nihil"; bias = "Netral" 
     entry_price = current_price 
@@ -390,8 +391,8 @@ if not found_trades:
     st.warning(f"⚠️ Pemindaian selesai dalam **{total_time:.2f} detik**. Tidak ditemukan sinyal *Market Structure* yang kuat saat ini.")
     st.header("⚡ Laporan Koin Penggerak (24 Jam) - Alternatif Trading")
     
-    # Kumpulkan semua hasil (termasuk yang Nihil) yang memiliki data harga dan persentase
-    movers = [r for r in all_results if r.get('current_price') is not None and r.get('conviction') != 'Error']
+    # Kumpulkan semua hasil YANG SEHAT: current_price ada, change_pct != 0, DAN bukan error
+    movers = [r for r in all_results if r.get('current_price') is not None and r.get('change_pct') != 0.0 and r.get('conviction') != 'Error']
 
     if movers:
         # Sortir menggunakan data perubahan 24 jam yang dihitung secara lokal
@@ -429,7 +430,7 @@ if not found_trades:
              st.info("Koin ini memiliki pergerakan harga 24 jam tertinggi. Perubahan dihitung dari candlestick Daily terakhir.")
     
     else:
-        st.error("Gagal memuat data harga dari bursa. Koneksi Binance ke Streamlit Cloud mungkin tidak stabil.")
+        st.error("Gagal memuat data harga yang cukup dari bursa untuk analisis. Koneksi Binance ke Streamlit Cloud mungkin tidak stabil.")
 
 else:
     # KASUS: SINYAL DITEMUKAN -> TAMPILKAN SINYAL RENDAH, SEDANG, TINGGI
