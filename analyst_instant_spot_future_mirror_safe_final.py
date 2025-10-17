@@ -1,5 +1,5 @@
-# analyst_instant_spot_final_safe.py
-# Streamlit Spot Analyst — 100% anti-error dan anti-blank screen
+# analyst_instant_spot_final_stable.py
+# Versi gabungan akhir — Spot Only • Anti Error • Struktur, Fibo, Support/Resistance, Conviction
 
 import streamlit as st
 import pandas as pd
@@ -8,11 +8,12 @@ import yfinance as yf
 import plotly.graph_objects as go
 import time
 
-# ======== CONFIG ========
-st.set_page_config(layout="wide", page_title="AI Analyst Spot Safe")
+# ========================== PAGE CONFIG ==========================
+st.set_page_config(layout="wide", page_title="AI Analyst Spot (Stable Final)")
 st.set_option('client.showErrorDetails', True)
-st.title("🚀 Instant AI Analyst — Spot Only (Safe Mode)")
-st.caption("Analisa struktur • Fibonacci • Support & Resistance • Conviction (Yahoo Data)")
+
+st.title("🚀 Instant AI Analyst — Spot Only (Stable Final)")
+st.caption("Struktur • Fibonacci • Support/Resistance • Conviction • Data Spot Yahoo Finance")
 st.markdown("---")
 
 col1, col2 = st.columns([2, 8])
@@ -23,7 +24,7 @@ if st.button("🔄 Scan Ulang Sekarang"):
     st.cache_data.clear()
     st.experimental_rerun()
 
-# ======== COIN LIST ========
+# ========================== COIN LIST ==========================
 COINS = [
     "BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","DOGEUSDT","PEPEUSDT","ARBUSDT","OPUSDT","AVAXUSDT",
     "MATICUSDT","TIAUSDT","LINKUSDT","RNDRUSDT","XRPUSDT","ADAUSDT","SHIBUSDT","NEARUSDT","ATOMUSDT",
@@ -31,22 +32,39 @@ COINS = [
 ]
 TOTAL = len(COINS)
 YF_INTERVAL = {"1d": "1d", "4h": "60m", "1h": "60m"}
+
 def to_yf(sym): return sym[:-4] + "-USD" if sym.endswith("USDT") else sym
 
-# ======== ANALYZE FUNCTION SAFE ========
+# ========================== ANALYZE (FINAL SAFE) ==========================
 def analyze_df(df):
+    """Analisis aman 100% dari semua error dan variasi format data."""
     if not isinstance(df, pd.DataFrame) or df.empty:
         return {"structure": "No Data", "fib_bias": "Netral", "support": None, "resistance": None,
                 "current": None, "change": 0.0, "conviction": "Rendah"}
-    if "Close" not in df.columns:
-        if "Adj Close" in df.columns:
-            df = df.rename(columns={"Adj Close": "Close"})
-        else:
-            return {"structure": "No Data", "fib_bias": "Netral", "support": None, "resistance": None,
-                    "current": None, "change": 0.0, "conviction": "Rendah"}
 
-    # pastikan numerik aman
-    for col in ["Open","High","Low","Close"]:
+    # --- perbaiki MultiIndex dari yfinance
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = ['_'.join([str(c) for c in col if c]) for col in df.columns]
+
+    # --- temukan kolom Close, Open, High, Low
+    close_cols = [c for c in df.columns if "Close" in c]
+    if close_cols:
+        df = df.rename(columns={close_cols[0]: "Close"})
+    else:
+        return {"structure": "No Data", "fib_bias": "Netral", "support": None, "resistance": None,
+                "current": None, "change": 0.0, "conviction": "Rendah"}
+
+    for name in ["Open", "High", "Low"]:
+        alt = [c for c in df.columns if name in c]
+        if alt:
+            df = df.rename(columns={alt[0]: name})
+        elif name not in df.columns:
+            df[name] = df["Close"]
+
+    # --- pastikan kolom numerik valid
+    for col in ["Open", "High", "Low", "Close"]:
+        if col in df.columns and not isinstance(df[col], (pd.Series, list, tuple, np.ndarray)):
+            df[col] = pd.Series(df[col])
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
@@ -61,14 +79,12 @@ def analyze_df(df):
 
     hi, lo = float(df["High"].max()), float(df["Low"].min())
     diff = hi - lo if hi and lo else 0.0
-
     fib_bias = "Netral"
     if diff > 0:
         fib61, fib38 = hi - diff * 0.618, hi - diff * 0.382
         if cur > fib61: fib_bias = "Bullish"
         elif cur < fib38: fib_bias = "Bearish"
 
-    # Struktur
     struct = "Konsolidasi"
     try:
         rec = df[["High", "Low"]].tail(20)
@@ -82,7 +98,6 @@ def analyze_df(df):
     except Exception:
         pass
 
-    # Support / Resistance
     support = float(df["Low"].rolling(20).min().iloc[-1])
     resistance = float(df["High"].rolling(20).max().iloc[-1])
 
@@ -96,7 +111,7 @@ def analyze_df(df):
     return {"structure": struct, "fib_bias": fib_bias, "support": support,
             "resistance": resistance, "current": cur, "change": change, "conviction": conviction}
 
-# ======== FETCH ========
+# ========================== FETCH DATA ==========================
 @st.cache_data(ttl=120)
 def fetch_data(symbols, interval):
     data = {}
@@ -109,7 +124,7 @@ def fetch_data(symbols, interval):
             pass
     return data
 
-st.info(f"⏳ Memindai {TOTAL} koin Spot...")
+st.info(f"⏳ Memindai {TOTAL} koin Spot (Yahoo Finance)...")
 start = time.time()
 data = fetch_data(COINS, YF_INTERVAL[tf])
 
@@ -118,21 +133,26 @@ for i, (sym, df) in enumerate(data.items()):
     res = analyze_df(df)
     res["symbol"] = sym
     results.append(res)
-    if i % 2 == 0:
-        st.progress((i+1)/TOTAL, text=f"📊 {sym}")
+    if i % 3 == 0:
+        st.progress((i + 1) / TOTAL, text=f"📊 {sym}")
+    time.sleep(0.01)
 
 elapsed = time.time() - start
 st.success(f"✅ Pemindaian selesai dalam {elapsed:.1f} detik")
+
 dfres = pd.DataFrame(results)
 
-# ======== TABEL HASIL ========
+# ========================== TABLE ==========================
 if not dfres.empty:
-    st.dataframe(dfres[["symbol","structure","fib_bias","support","resistance","change","conviction"]]
-                 .sort_values("change", ascending=False).reset_index(drop=True))
+    st.dataframe(
+        dfres[["symbol", "structure", "fib_bias", "support", "resistance", "change", "conviction"]]
+        .sort_values("change", ascending=False)
+        .reset_index(drop=True)
+    )
 else:
     st.warning("⚠️ Tidak ada data valid yang berhasil diambil.")
 
-# ======== CHART ========
+# ========================== CHART ==========================
 symbol = st.selectbox("📈 Pilih koin untuk grafik:", sorted(dfres["symbol"].unique() if not dfres.empty else ["BTCUSDT"]))
 try:
     chart = yf.download(to_yf(symbol), period="120d", interval=YF_INTERVAL[tf], progress=False)
@@ -152,18 +172,20 @@ else:
 
     fig = go.Figure()
     if chart_style == "Candlestick":
-        fig.add_trace(go.Candlestick(x=chart.index, open=chart["Open"], high=chart["High"],
-                                     low=chart["Low"], close=chart["Close"], name="Price"))
+        fig.add_trace(go.Candlestick(
+            x=chart.index, open=chart["Open"], high=chart["High"],
+            low=chart["Low"], close=chart["Close"], name="Price"))
     else:
         fig.add_trace(go.Scatter(x=chart.index, y=chart["Close"], mode="lines", name="Close"))
+
     for i in ["EMA20", "EMA50"]:
         if i in chart.columns:
             fig.add_trace(go.Scatter(x=chart.index, y=chart[i], mode="lines", name=i))
-    if {"BB_up","BB_dn"}.issubset(chart.columns):
+    if {"BB_up", "BB_dn"}.issubset(chart.columns):
         fig.add_trace(go.Scatter(x=chart.index, y=chart["BB_up"], line=dict(width=0), showlegend=False))
         fig.add_trace(go.Scatter(x=chart.index, y=chart["BB_dn"], fill="tonexty", line=dict(width=0), showlegend=False))
 
-    # support/resistance
+    # Support/Resistance lines
     if last["support"]:
         fig.add_hline(y=last["support"], line=dict(color="green", dash="dot"), annotation_text="Support")
     if last["resistance"]:
@@ -173,4 +195,4 @@ else:
                       title=f"{symbol} | {last['structure']} | {last['fib_bias']} | Conviction: {last['conviction']}")
     st.plotly_chart(fig, use_container_width=True)
 
-st.caption("✅ Data Spot dari Yahoo Finance • EMA20/50 • BB(20,2) • RSI14 • Struktur • Fibonacci • Support/Resistance")
+st.caption("✅ Data Spot Yahoo Finance • EMA20/50 • BB(20,2) • Struktur • Fibonacci • Support/Resistance • Conviction")
