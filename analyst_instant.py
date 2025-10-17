@@ -1,20 +1,28 @@
 # File: analyst_instant.py
-# Versi: 15.4 - Resource Koins Kuat (200+ Koin, Termasuk Meme)
+# Versi: 15.6 - Resource Kuat (350+ Koin)
 # Tujuan: Menambah resource koin secara signifikan untuk meningkatkan hasil analisis.
 
 import streamlit as st
 import pandas as pd
-import ccxt.pro as ccxt  # ccxt sekarang adalah alias untuk ccxt.pro
+import numpy as np
 import asyncio
 import time
-import numpy as np
+
+# --- FIX KRITIS IMPOR CCXT/CCXT.PRO ---
+try:
+    import ccxt
+    import ccxt.pro
+except ImportError:
+    st.error("Gagal mengimpor ccxt. Pastikan ccxt dan ccxt.pro terinstal di requirements.txt.")
+    st.stop()
+
 
 # --- KONSTANTA OPTIMASI GLOBAL ---
-ASYNC_BATCH_SIZE = 20 # Membatasi koneksi serentak untuk menghindari 'too many file descriptors'
+ASYNC_BATCH_SIZE = 20 # Membatasi koneksi serentak
 
-# --- DAFTAR KOIN DASAR (DIPERKUAT MENJADI 200+ SIMBOL) ---
+# --- DAFTAR KOIN DASAR (350+ SIMBOL PERPETUAL USDT) ---
 BASE_COIN_UNIVERSE = [
-    # --- BLOCKCHAIN UTAMA & DEFI CORE --- (Sekitar 200+ total)
+    # --- UTAMA (Top 100) ---
     'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'DOGE/USDT', 'BNB/USDT', 'ADA/USDT',
     'AVAX/USDT', 'LINK/USDT', 'DOT/USDT', 'MATIC/USDT', 'SHIB/USDT', 'TRX/USDT', 'BCH/USDT',
     'LTC/USDT', 'NEAR/USDT', 'UNI/USDT', 'ICP/USDT', 'PEPE/USDT', 'TON/USDT', 'KAS/USDT',
@@ -31,34 +39,93 @@ BASE_COIN_UNIVERSE = [
     'PERP/USDT', 'RLC/USDT', 'CTXC/USDT', 'BAKE/USDT', 'KAVA/USDT', 'CELR/USDT', 'RVN/USDT', 
     'TLM/USDT', 'TFUEL/USDT', 'STX/USDT', 'JASMY/USDT', 'GLMR/USDT', 'MASK/USDT', 'DODO/USDT', 
     'ASTR/USDT', 'ACH/USDT', 'AGIX/USDT', 'SPELL/USDT', 'WOO/USDT', 'VELO/USDT',
+    'FLOKI/USDT', 'BONK/USDT', '1000PEPE/USDT', 'MEME/USDT', 'PENGU/USDT', 'TRUMP/USDT', 
+    'FART/USDT', 'TOSHI/USDT', 'BOME/USDT', 'ARKM/USDT', 'TAO/USDT', 'AKT/USDT', 'NMT/USDT', 
+    'OLAS/USDT', 'CQT/USDT', 'PHB/USDT', 'OPSEC/USDT', 'GLM/USDT', 'SEILOR/USDT', 
+    'METIS/USDT', 'STRK/USDT', 'ZETA/USDT', 'ALT/USDT', 'LSK/USDT', 'BEAM/USDT', 'AEVO/USDT', 
+    'CKB/USDT', 'SSV/USDT', 'MAVIA/USDT', 'JTO/USDT', 'BLUR/USDT', 'SC/USDT', 'CFX/USDT', 
+    'FLR/USDT', 'MOVR/USDT', 'GNS/USDT', 'HIGH/USDT', 'MAGIC/USDT', 'RDNT/USDT', 'LEVER/USDT', 
+    'CTSI/USDT', 'VRA/USDT', 'POLS/USDT', 'XEC/USDT', 'KLAY/USDT', 'WEMIX/USDT', 'API3/USDT', 
+    'BEL/USDT', 'CHESS/USDT', 'SKL/USDT', 'STMX/USDT', 'ONG/USDT', 'ARPA/USDT', 'HFT/USDT', 
+    'PENDLE/USDT', 'GTC/USDT', 'EDU/USDT', 'YGG/USDT', 'LINA/USDT', 'MC/USDT', 'C98/USDT', 
+    'ZRO/USDT', 'AITECH/USDT', 'PRIME/USDT', 'MANTLE/USDT',
+    'GAL/USDT', 'NMR/USDT', 'SFP/USDT', 'TOMO/USDT', 'SYS/USDT', 'WAXP/USDT', 'PHA/USDT', 
+    'ALICE/USDT', 'DUSK/USDT', 'ILV/USDT', 'RSR/USDT', 'T/USDT', 'RIF/USDT', 'BADGER/USDT', 
+    'KP3R/USDT', 'DAR/USDT', 'CPOOL/USDT', 'AUCTION/USDT', 'ZKS/USDT', 'XVS/USDT', 'NKN/USDT', 
+    'MDT/USDT', 'PROS/USDT', 'TRU/USDT', 'REI/USDT', 'DATA/USDT', 'KEY/USDT', 'LOOM/USDT', 
+    'HIFI/USDT', 'LRC/USDT', 'ZBC/USDT', 'HYPE/USDT', 'ASTER/USDT', 'USELESS/USDT', 
+    'LAUNCHCOIN/USDT', 
     
-    # --- TAMBAHAN MEME COINS (High Volatility) ---
-    'FLOKI/USDT', 'WIF/USDT', 'BONK/USDT', '1000PEPE/USDT', 'MEME/USDT', 
-    'PENGU/USDT', 'TRUMP/USDT', 'FART/USDT', 'TOSHI/USDT', 'BOME/USDT',
-    
-    # --- TAMBAHAN AI & DEPIN ---
-    'ARKM/USDT', 'TAO/USDT', 'AKT/USDT', 'NMT/USDT', 'OLAS/USDT', 'IOTX/USDT', 'CQT/USDT', 
-    'PHB/USDT', 'OPSEC/USDT', 'ROSE/USDT', 'GLM/USDT', 'FET/USDT', 'AGIX/USDT', 'OCEAN/USDT',
-
-    # --- TAMBAHAN L1/L2 & EKOSISTEM BARU ---
-    'SEILOR/USDT', 'METIS/USDT', 'STRK/USDT', 'ZETA/USDT', 'ALT/USDT', 'LSK/USDT', 'BEAM/USDT',
-    'AEVO/USDT', 'CKB/USDT', 'FXS/USDT', 'SSV/USDT', 'MAVIA/USDT', 'JTO/USDT', 'BLUR/USDT',
-    'SC/USDT', 'CFX/USDT', 'FLR/USDT', 'MOVR/USDT', 'GNS/USDT', 'HIGH/USDT', 'KAS/USDT',
+    # --- KOIN TAMBAHAN MASSIVE (Mencapai 350+) ---
+    'AERGO/USDT', 'AKRO/USDT', 'ALPHA/USDT', 'ANKR/USDT', 'ATA/USDT', 'BADGER/USDT', 'BAL/USDT', 
+    'BAND/USDT', 'BEL/USDT', 'BICO/USDT', 'BLZ/USDT', 'BNX/USDT', 'CELO/USDT', 'C98/USDT', 
+    'CHZ/USDT', 'CLV/USDT', 'COTI/USDT', 'DENT/USDT', 'DGB/USDT', 'DMTR/USDT', 'DODO/USDT', 
+    'DREP/USDT', 'DUSK/USDT', 'EGLD/USDT', 'ELF/USDT', 'ENJ/USDT', 'EPS/USDT', 'ERTHA/USDT', 
+    'FIS/USDT', 'FORTH/USDT', 'FTM/USDT', 'GALA/USDT', 'GHST/USDT', 'GTC/USDT', 'HARD/USDT', 
+    'HIGH/USDT', 'HNT/USDT', 'HOT/USDT', 'ICP/USDT', 'IDEX/USDT', 'ILV/USDT', 'IOST/USDT', 
+    'IOTA/USDT', 'IRIS/USDT', 'JASMY/USDT', 'KNC/USDT', 'KSM/USDT', 'LINA/USDT', 'LRC/USDT', 
+    'LUNA/USDT', 'MBOX/USDT', 'MC/USDT', 'MITH/USDT', 'MTL/USDT', 'NKN/USDT', 'NULS/USDT', 
+    'ONE/USDT', 'OXT/USDT', 'PERL/USDT', 'PHA/USDT', 'POLS/USDT', 'PUNDIX/USDT', 'QLC/USDT', 
+    'QUICK/USDT', 'RAY/USDT', 'RDNT/USDT', 'REEF/USDT', 'REN/USDT', 'REQ/USDT', 'RNDR/USDT', 
+    'RVN/USDT', 'SFP/USDT', 'SKL/USDT', 'SNX/USDT', 'SOLO/USDT', 'SOS/USDT', 'SRM/USDT', 
+    'STEEM/USDT', 'STG/USDT', 'STORJ/USDT', 'STX/USDT', 'SUN/USDT', 'SUSHI/USDT', 'T/USDT', 
+    'TFUEL/USDT', 'TLM/USDT', 'TOMO/USDT', 'TRB/USDT', 'TUSD/USDT', 'UTK/USDT', 'VIB/USDT', 
+    'VRA/USDT', 'WAN/USDT', 'WAVES/USDT', 'WAXP/USDT', 'WOO/USDT', 'XEC/USDT', 'XEM/USDT', 
+    'XYO/USDT', 'YFI/USDT', 'YGG/USDT', 'ZEC/USDT', 'ZEN/USDT', 'ZRX/USDT', 'KSM/USDT',
     'MINA/USDT', 'CELR/USDT', 'MAGIC/USDT', 'RDNT/USDT', 'LEVER/USDT', 'CTSI/USDT', 'VRA/USDT',
     'POLS/USDT', 'XEC/USDT', 'KLAY/USDT', 'WEMIX/USDT', 'API3/USDT', 'BEL/USDT', 'CHESS/USDT',
     'SKL/USDT', 'STMX/USDT', 'ONG/USDT', 'ARPA/USDT', 'BAKE/USDT', 'HFT/USDT', 'PENDLE/USDT', 
     'GTC/USDT', 'EDU/USDT', 'TLM/USDT', 'YGG/USDT', 'LINA/USDT', 'SSV/USDT', 'MC/USDT', 
-    'C98/USDT', 'ZRO/USDT', 'PYTH/USDT', 'AITECH/USDT', 'PRIME/USDT', 'MANTLE/USDT',
-    
-    # --- KOIN KAPITALISASI KECIL LAINNYA ---
-    'GAL/USDT', 'NMR/USDT', 'SFP/USDT', 'TOMO/USDT', 'SYS/USDT', 'TLM/USDT', 'VRA/USDT',
-    'WAXP/USDT', 'PHA/USDT', 'ALICE/USDT', 'DUSK/USDT', 'ILV/USDT', 'RSR/USDT', 'T/USDT',
-    'RIF/USDT', 'BADGER/USDT', 'KP3R/USDT', 'DAR/USDT', 'CPOOL/USDT', 'AUCTION/USDT',
-    'ZEN/USDT', 'ZKS/USDT', 'XVS/USDT', 'NKN/USDT', 'MDT/USDT', 'PROS/USDT', 'TRU/USDT',
-    'REI/USDT', 'DATA/USDT', 'KEY/USDT', 'LOOM/USDT', 'HIFI/USDT', 'LRC/USDT', 'ZBC/USDT',
-    'HYPE/USDT', 'ASTER/USDT', 'USELESS/USDT', 'LAUNCHCOIN/USDT', 'PERP/USDT', 
+    'C98/USDT', 'ZRO/USDT', 'AITECH/USDT', 'PRIME/USDT', 'MANTLE/USDT',
+    'UMA/USDT', 'CRV/USDT', 'LRC/USDT', 'MANA/USDT', 'SAND/USDT', 'AXS/USDT', 'BAT/USDT', 
+    'CHZ/USDT', 'DODO/USDT', 'GALA/USDT', 'GRT/USDT', 'LINK/USDT', 'MKR/USDT', 'NEO/USDT', 
+    'ONT/USDT', 'QTUM/USDT', 'RVN/USDT', 'SFP/USDT', 'STX/USDT', 'SUSHI/USDT', 'THETA/USDT',
+    'UNI/USDT', 'VET/USDT', 'WAVES/USDT', 'XLM/USDT', 'ZIL/USDT', 'ZRX/USDT', 'BNX/USDT',
+    'FTT/USDT', 'GMT/USDT', 'HNT/USDT', 'ICP/USDT', 'IMX/USDT', 'KNC/USDT', 'LDO/USDT',
+    'MINA/USDT', 'NEAR/USDT', 'OP/USDT', 'PEPE/USDT', 'RNDR/USDT', 'SEI/USDT', 'SUI/USDT',
+    'TIA/USDT', 'WLD/USDT', 'XVS/USDT', 'YFI/USDT', 'ZEC/USDT', 'ZRX/USDT', 'AAVE/USDT', 
+    'AIOZ/USDT', 'ALICE/USDT', 'ANKR/USDT', 'API3/USDT', 'BADGER/USDT', 'BAKE/USDT', 'BEL/USDT',
+    'CTSI/USDT', 'DASH/USDT', 'DCR/USDT', 'DEGO/USDT', 'DGB/USDT', 'DNT/USDT', 'DODO/USDT',
+    'DREP/USDT', 'DUSK/USDT', 'EGLD/USDT', 'ENJ/USDT', 'ETC/USDT', 'FIS/USDT', 'FLM/USDT',
+    'FLOW/USDT', 'FXS/USDT', 'GALA/USDT', 'GTC/USDT', 'HFT/USDT', 'HIVE/USDT', 'HBAR/USDT',
+    'ICX/USDT', 'IDEX/USDT', 'IOTX/USDT', 'JASMY/USDT', 'KAVA/USDT', 'KLAY/USDT', 'KNC/USDT',
+    'KSM/USDT', 'LINA/USDT', 'LRC/USDT', 'LTO/USDT', 'MANA/USDT', 'MASK/USDT', 'MATIC/USDT',
+    'MC/USDT', 'MDT/USDT', 'MINA/USDT', 'MITH/USDT', 'MKR/USDT', 'NANO/USDT', 'NKN/USDT',
+    'NMR/USDT', 'OCEAN/USDT', 'OGN/USDT', 'OMG/USDT', 'ONE/USDT', 'ONT/USDT', 'OXT/USDT',
+    'PHA/USDT', 'POLS/USDT', 'PROS/USDT', 'PUNDIX/USDT', 'QNT/USDT', 'QTUM/USDT', 'REEF/USDT',
+    'REN/USDT', 'REQ/USDT', 'RSR/USDT', 'RUNE/USDT', 'RVN/USDT', 'SAND/USDT', 'SC/USDT',
+    'SFP/USDT', 'SKL/USDT', 'SNX/USDT', 'SOLO/USDT', 'SRM/USDT', 'SSV/USDT', 'STG/USDT',
+    'STORJ/USDT', 'STX/USDT', 'SUN/USDT', 'SUSHI/USDT', 'SXP/USDT', 'T/USDT', 'THETA/USDT',
+    'TOMO/USDT', 'TRB/USDT', 'TRU/USDT', 'TUSD/USDT', 'UMA/USDT', 'UNFI/USDT', 'VIB/USDT',
+    'VRA/USDT', 'WAVES/USDT', 'WAXP/USDT', 'WEMIX/USDT', 'WOO/USDT', 'XEC/USDT', 'XEM/USDT',
+    'XLM/USDT', 'XRP/USDT', 'XVS/USDT', 'YFI/USDT', 'YGG/USDT', 'ZEC/USDT', 'ZEN/USDT',
+    'ZIL/USDT', 'ZRX/USDT', 'ZKS/USDT', 'AR/USDT', 'AAVE/USDT', 'AERGO/USDT', 'AGIX/USDT',
+    'AKRO/USDT', 'ALICE/USDT', 'ALPHA/USDT', 'ANKR/USDT', 'APENFT/USDT', 'API3/USDT', 'ARPA/USDT',
+    'AUCTION/USDT', 'BADGER/USDT', 'BAKE/USDT', 'BAL/USDT', 'BAND/USDT', 'BAT/USDT', 'BCH/USDT',
+    'BEL/USDT', 'BICO/USDT', 'BLUR/USDT', 'BLZ/USDT', 'BNX/USDT', 'BSW/USDT', 'BTT/USDT',
+    'C98/USDT', 'CELR/USDT', 'CELO/USDT', 'CHZ/USDT', 'CLV/USDT', 'COMP/USDT', 'COTI/USDT',
+    'CRV/USDT', 'CTK/USDT', 'CTSI/USDT', 'CVC/USDT', 'DAR/USDT', 'DASH/USDT', 'DCR/USDT',
+    'DENT/USDT', 'DGB/USDT', 'DODO/USDT', 'DOT/USDT', 'DREP/USDT', 'DUSK/USDT', 'DYDX/USDT',
+    'EGLD/USDT', 'ENJ/USDT', 'EOS/USDT', 'ETC/USDT', 'FET/USDT', 'FIL/USDT', 'FLM/USDT',
+    'FLOW/USDT', 'FORTH/USDT', 'FTM/USDT', 'FXS/USDT', 'GALA/USDT', 'GMX/USDT', 'GTC/USDT',
+    'GRT/USDT', 'HBAR/USDT', 'HFT/USDT', 'HIVE/USDT', 'ICP/USDT', 'ICX/USDT', 'IMX/USDT',
+    'INJ/USDT', 'IOST/USDT', 'IOTA/USDT', 'IOTX/USDT', 'IRIS/USDT', 'JASMY/USDT', 'KAVA/USDT',
+    'KLAY/USDT', 'KNC/USDT', 'KSM/USDT', 'LDO/USDT', 'LEVER/USDT', 'LINA/USDT', 'LINK/USDT',
+    'LPT/USDT', 'LRC/USDT', 'LTC/USDT', 'LUNA/USDT', 'MANA/USDT', 'MASK/USDT', 'MATIC/USDT',
+    'MDT/USDT', 'MINA/USDT', 'MITH/USDT', 'MKR/USDT', 'MTL/USDT', 'NANO/USDT', 'NEAR/USDT',
+    'NEO/USDT', 'NKN/USDT', 'NMR/USDT', 'OCEAN/USDT', 'OGN/USDT', 'OMG/USDT', 'ONE/USDT',
+    'ONT/USDT', 'OXT/USDT', 'PAXG/USDT', 'PENDLE/USDT', 'PEPE/USDT', 'PHA/USDT', 'PHB/USDT',
+    'POLS/USDT', 'PROS/USDT', 'PUNDIX/USDT', 'QNT/USDT', 'QTUM/USDT', 'RAY/USDT', 'RDNT/USDT',
+    'REEF/USDT', 'REN/USDT', 'REQ/USDT', 'RIF/USDT', 'RLC/USDT', 'RNDR/USDT', 'ROSE/USDT',
+    'RSR/USDT', 'RUNE/USDT', 'RVN/USDT', 'SAND/USDT', 'SC/USDT', 'SFP/USDT', 'SHIB/USDT',
+    'SKL/USDT', 'SNX/USDT', 'SOL/USDT', 'SRM/USDT', 'SSV/USDT', 'STG/USDT', 'STORJ/USDT',
+    'STX/USDT', 'SUN/USDT', 'SUSHI/USDT', 'SUI/USDT', 'SXP/USDT', 'T/USDT', 'THETA/USDT',
+    'TIA/USDT', 'TLM/USDT', 'TOMO/USDT', 'TON/USDT', 'TRB/USDT', 'TRU/USDT', 'TRX/USDT',
+    'TUSD/USDT', 'UMA/USDT', 'UNI/USDT', 'USDC/USDT', 'USTC/USDT', 'VET/USDT', 'VRA/USDT',
+    'WAVES/USDT', 'WAXP/USDT', 'WEMIX/USDT', 'WLD/USDT', 'WOO/USDT', 'XEC/USDT', 'XEM/USDT',
+    'XLM/USDT', 'XRP/USDT', 'XVS/USDT', 'YFI/USDT', 'YGG/USDT', 'ZEC/USDT', 'ZEN/USDT',
+    'ZIL/USDT', 'ZRX/USDT', 'ZKS/USDT', 'ZRO/USDT', '1000SHIB/USDT' # Contoh 1000 token
 ]
-
 
 # --- PENGATURAN HALAMAN & KONFIGURASI AWAL ---
 st.set_page_config(layout="wide", page_title="Instant AI Analyst", initial_sidebar_state="collapsed")
@@ -91,7 +158,7 @@ async def get_new_perpetual_symbols(current_coins):
 
     async def fetch_markets(exchange_id):
         try:
-            exchange = getattr(ccxt, exchange_id)({
+            exchange = getattr(ccxt.pro, exchange_id)({ 
                 'options': {'defaultType': 'future'},
                 'timeout': 10000 
             })
@@ -121,7 +188,7 @@ async def get_new_perpetual_symbols(current_coins):
 async def fetch_daily_data(symbol, days=365):
     """Mengambil data harian asinkron dari Bybit (Sumber Utama)."""
     
-    exchange = ccxt.bybit({
+    exchange = getattr(ccxt.pro, 'bybit')({ 
         'options': {'defaultType': 'future'}
     }) 
     
@@ -133,6 +200,11 @@ async def fetch_daily_data(symbol, days=365):
             df = pd.DataFrame(bars, columns=['timestamp', 'Open', 'High', 'Low', 'Close', 'Volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
             df.set_index('timestamp', inplace=True)
+            
+            # FIX ROBUSTNESS: Menghapus informasi timezone untuk mencegah error resampling di Pandas
+            if df.index.tz is not None:
+                df.index = df.index.tz_localize(None)
+                
     except Exception as e:
         pass 
     finally:
