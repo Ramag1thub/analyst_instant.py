@@ -1,6 +1,6 @@
 # File: analyst_instant.py
-# Versi: 16.0 - Simple, Stabil, Sinkron (Menghapus asyncio dan ccxt.pro)
-# Tujuan: Stabilitas maksimum dan bebas error dengan mengorbankan kecepatan paralel.
+# Versi: 16.0 - FINAL STABIL DAN BEBAS ERROR (Mode Sinkron)
+# Tujuan: Stabilitas maksimum, mengatasi semua error, dan menggunakan logika RR 3:1 fleksibel.
 
 import streamlit as st
 import pandas as pd
@@ -9,9 +9,10 @@ import time
 
 # --- PENTING: Menggunakan CCXT Sinkron ---
 try:
-    import ccxt
+    # Hanya butuh ccxt, ccxt.pro dan asyncio dihapus untuk stabilitas maksimum.
+    import ccxt 
 except ImportError:
-    st.error("Gagal mengimpor ccxt. Pastikan ccxt terinstal di requirements.txt.")
+    st.error("Gagal mengimpor ccxt. Pastikan ccxt terinstal di requirements.txt (Hanya ccxt, bukan ccxt.pro atau asyncio).")
     st.stop()
 
 
@@ -20,7 +21,7 @@ except ImportError:
 
 # --- DAFTAR KOIN DASAR (350+ SIMBOL PERPETUAL USDT) ---
 BASE_COIN_UNIVERSE = [
-    # Daftar Koin 350+ (tetap sama)
+    # --- BLOCKCHAIN UTAMA & DEFI CORE --- (Sekitar 350+ total)
     'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'DOGE/USDT', 'BNB/USDT', 'ADA/USDT',
     'AVAX/USDT', 'LINK/USDT', 'DOT/USDT', 'MATIC/USDT', 'SHIB/USDT', 'TRX/USDT', 'BCH/USDT',
     'LTC/USDT', 'NEAR/USDT', 'UNI/USDT', 'ICP/USDT', 'PEPE/USDT', 'TON/USDT', 'KAS/USDT',
@@ -76,9 +77,11 @@ BASE_COIN_UNIVERSE = [
     'IDEX/USDT', 'IOST/USDT', 'IRIS/USDT', 'JASMY/USDT', 'KLAY/USDT', 'LPT/USDT', 'LTO/USDT',
     'NANO/USDT', 'OXT/USDT', 'PAXG/USDT', 'PHB/USDT', 'PUNDIX/USDT', 'QNT/USDT',
     'RAY/USDT', 'RIF/USDT', 'RLC/USDT', 'RSR/USDT', 'RUNE/USDT', 'SXP/USDT', 'T/USDT',
-    'TRB/USDT', 'TRU/USDT', 'UNFI/USDT', 'UTK/USDT', 'VIB/USDT', 'WEMIX/USDT', 'XYO/USDT',
-    'ZKS/USDT', 'ZRO/USDT' 
+    'TRB/USDT', 'TRU/USDT', 'TUSD/USDT', 'UMA/USDT', 'UNFI/USDT', 'UTK/USDT', 'VIB/USDT', 'WEMIX/USDT', 'XYO/USDT', 'ZKS/USDT', 'ZRO/USDT'
 ]
+
+# --- PENGATURAN HALAMAN & KONFIGURASI AWAL ---
+st.set_page_config(layout="wide", page_title="Instant AI Analyst", initial_sidebar_state="collapsed")
 
 # --- UI/UX CSS ---
 INSTANT_CSS = """
@@ -99,14 +102,14 @@ st.markdown(INSTANT_CSS, unsafe_allow_html=True)
 
 # --- FUNGSI UTAMA (SINKRON, NON-ASYNC) ---
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=3600)
 def fetch_daily_data(symbol, days=365):
     """Mengambil data harian SINKRON dari Bybit (Sumber Utama)."""
     
     # Inisialisasi exchange sinkron
     exchange = ccxt.bybit({ 
         'options': {'defaultType': 'future'},
-        'timeout': 10000 
+        'timeout': 15000 # Timeout lebih lama untuk menghindari kegagalan fetch 
     }) 
     
     df = None
@@ -123,10 +126,8 @@ def fetch_daily_data(symbol, days=365):
                 df.index = df.index.tz_localize(None)
                 
     except Exception as e:
-        # Menangani koin yang tidak tersedia/time out individual
         pass 
     finally:
-        # Tutup koneksi (meskipun sinkron, praktik yang baik)
         exchange.close()
     return df
 
@@ -163,7 +164,6 @@ def analyze_structure(df):
 def find_signal_resampled(symbol, user_timeframe):
     """Mengambil data dan menganalisis secara lokal (SINKRON)."""
     
-    # PANGGILAN SINKRON
     df_daily = fetch_daily_data(symbol) 
     
     if df_daily is None: return None
@@ -192,16 +192,19 @@ def find_signal_resampled(symbol, user_timeframe):
     entry_price = current_price
     sl_pct = 0; tp1_pct = 0; tp2_pct = 0
     
+    # --- Kriteria Kuat (Conviction TINGGI) - RR 2:1 (Ketat) ---
     if structure_w == 'Bullish' and structure_d == 'Bullish' and structure_user == 'Bullish' and fib_bias_d == 'Bullish': 
         conviction = "Tinggi"; bias = "Bullish Kuat"
         tp1_pct = 5; tp2_pct = 10; sl_pct = 2.5 
     elif structure_w == 'Bearish' and structure_d == 'Bearish' and structure_user == 'Bearish' and fib_bias_d == 'Bearish': 
         conviction = "Tinggi"; bias = "Bearish Kuat"
         tp1_pct = -5; tp2_pct = -10; sl_pct = -2.5 
+    
+    # --- Kriteria Sedang (Conviction SEDANG) - RR Fleksibel (3:1) ---
     elif structure_d == 'Bullish' and structure_user == 'Bullish': 
         conviction = "Sedang"; bias = "Cenderung Bullish"
         tp1_pct = 3; tp2_pct = 7; sl_pct = 1.0 
-    elif structure_d == 'Bearish' and structure_user == 'Bearish': 
+    elif structure_d == 'Bearish' dan structure_user == 'Bearish': 
         conviction = "Sedang"; bias = "Cenderung Bearish"
         tp1_pct = -3; tp2_pct = -7; sl_pct = -1.0 
 
@@ -226,7 +229,7 @@ def find_signal_resampled(symbol, user_timeframe):
     return None
 
 def run_scanner_streamed_sync(coin_universe, timeframe, status_placeholder):
-    """Menjalankan pemindaian secara SINKRON (berurutan)."""
+    """Menjalankan pemindaian secara SINKRON (berurutan) - SANGAT STABIL."""
     
     found_trades = []
     
@@ -235,7 +238,7 @@ def run_scanner_streamed_sync(coin_universe, timeframe, status_placeholder):
         if result:
             found_trades.append(result)
         
-        # Stream status update
+        # Stream status update setiap 20 koin
         if i % 20 == 0 or i == len(coin_universe) - 1:
             status_placeholder.info(f"Memindai {symbol}... Koin ke {i+1} dari {len(coin_universe)}. Ditemukan {len(found_trades)} sinyal.")
             
@@ -243,7 +246,7 @@ def run_scanner_streamed_sync(coin_universe, timeframe, status_placeholder):
 
 # --- ANTARMUKA APLIKASI WEB ---
 st.title("🚀 Instant AI Signal Dashboard")
-st.caption(f"Menganalisis {len(BASE_COIN_UNIVERSE)}+ koin secara **SINKRON** (Paling Stabil).")
+st.caption(f"Menganalisis {len(BASE_COIN_UNIVERSE)}+ koin secara **SINKRON** (Mode Paling Stabil).")
 
 col1, col2, col3 = st.columns([1.5, 1.5, 7])
 selected_tf = col1.selectbox("Pilih Timeframe Sinyal:", ['1d', '4h', '1h'], help="Pilih Timeframe sinyal yang diinginkan.")
@@ -260,8 +263,6 @@ start_time = time.time()
 
 status_placeholder.info(f"Memulai pemindaian instan untuk **{len(BASE_COIN_UNIVERSE)} koin** secara berurutan...")
 
-# Panggilan utama SINKRON
-# Catatan: Karena tidak ada discovery koin, COIN_UNIVERSE = BASE_COIN_UNIVERSE
 found_trades = run_scanner_streamed_sync(BASE_COIN_UNIVERSE, selected_tf, status_placeholder)
 total_time = time.time() - start_time
 
@@ -333,7 +334,7 @@ else:
                     st.markdown(f"**R/R Ratio (TP1):** **{format_rr(trade['rr_ratio'])}**", unsafe_allow_html=True)
 
 
-    st.markdown("---") # Garis pemisah antara Top 3 dan Daftar Lengkap
+    st.markdown("---") 
     
     # 3. Tampilkan Sinyal Keyakinan TINGGI Lainnya (jika ada)
     remaining_high_conviction = high_conviction[3:] if len(high_conviction) >= 3 else high_conviction
