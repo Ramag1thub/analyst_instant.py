@@ -1,6 +1,6 @@
 # File: analyst_instant.py
-# Versi: 20.1 - FINAL STABILITAS KONEKSI (Timeout Jaringan Diperpanjang)
-# Tujuan: Memperpanjang timeout jaringan dari 15s ke 30s untuk koneksi yang stabil.
+# Versi: 21.0 - FINAL REPORTING (Menampilkan Top Movers Saat Sinyal Nihil)
+# Tujuan: Memastikan hasil selalu ditampilkan, walaupun kriteria sinyal tidak terpenuhi.
 
 import streamlit as st
 import pandas as pd
@@ -11,7 +11,7 @@ import json
 
 # --- PENTING: PENGGUNAAN API PUBLIK BINANCE FUTURES ---
 BINANCE_API_URL = "https://fapi.binance.com/fapi/v1/klines"
-# TIMEOUT DIPERPANJANG UNTUK STABILITAS KONEKSI CLOUD
+BINANCE_TICKER_API_URL = "https://fapi.binance.com/fapi/v1/ticker/24hr" # API untuk data 24H Change
 REQUEST_TIMEOUT = 30 
 
 # --- DAFTAR KOIN DASAR (350+ SIMBOL PERPETUAL USDT) ---
@@ -93,6 +93,7 @@ INSTANT_CSS = """
     .highlight-pct { font-size: 1.1em; color: #ffaa00; font-weight: bold; }
     .low-conviction { color: #5c7e8e; } 
     .report-detail { font-size: 12px; margin-top: 5px; line-height: 1.5; }
+    .mover-price { font-size: 1.1em; }
 </style>
 """
 st.markdown(INSTANT_CSS, unsafe_allow_html=True)
@@ -117,7 +118,6 @@ def fetch_daily_data(symbol, days=365):
     
     df = None
     try:
-        # TIMEOUT DIPERPANJANG DI SINI
         response = requests.get(BINANCE_API_URL, params=params, timeout=REQUEST_TIMEOUT)
         response.raise_for_status() 
         
@@ -133,18 +133,44 @@ def fetch_daily_data(symbol, days=365):
             df = df.astype({'Open': float, 'High': float, 'Low': float, 'Close': float, 'Volume': float})
             df.set_index('timestamp', inplace=True)
             
-    except requests.exceptions.RequestException as e:
-        # Menangkap semua error koneksi dan timeout yang mungkin menyebabkan 0.04s scan
+    except requests.exceptions.RequestException:
         return None
     except Exception:
-        # Menangkap error parsing data koin yang tidak valid
         pass
         
     return df
 
+@st.cache_data(show_spinner=False, ttl=60) # Cache 24hr data lebih sebentar
+def fetch_24hr_movers(coin_universe):
+    """Mengambil data perubahan 24 jam untuk semua koin yang dianalisis."""
+    symbols = [s.replace('/', '') for s in coin_universe]
+    
+    # Binance API tidak mengizinkan query 350+ symbol sekaligus. Kita ambil semua data dan filter.
+    try:
+        response = requests.get(BINANCE_TICKER_API_URL, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        ticker_data = response.json()
+        
+        # Filter data hanya untuk koin yang ada di universe kita
+        filtered_movers = []
+        for item in ticker_data:
+            symbol_usdt = item['symbol']
+            if symbol_usdt.endswith('USDT') and f"{symbol_usdt[:-4]}/{symbol_usdt[-4:]}" in coin_universe:
+                filtered_movers.append({
+                    'symbol': f"{symbol_usdt[:-4]}/{symbol_usdt[-4:]}",
+                    'price': float(item.get('lastPrice', 0)),
+                    'change_pct': float(item.get('priceChangePercent', 0)),
+                })
+        
+        return filtered_movers
+    except requests.exceptions.RequestException:
+        return []
+    except Exception:
+        return []
+
 @st.cache_data(show_spinner=False)
 def analyze_structure(df):
-    """Analisis struktur dan mengembalikan status lengkap."""
+    """Analisis struktur dan mengembalikan status lengkap (Sama seperti V20.0)."""
     if df is None or len(df) < 20: 
         return {'structure': 'Data Tidak Cukup', 'current_price': None, 'fib_bias': 'Netral', 'high': None, 'low': None, 'proxy_low': None, 'proxy_high': None}
 
@@ -152,7 +178,7 @@ def analyze_structure(df):
     current_close = df['Close'].iloc[-1]
     df_recent = df[['High', 'Low']].tail(14)
 
-    # Logika Market Structure
+    # Logika Market Structure (sama)
     if len(df_recent) >= 14:
         recent_highs = df_recent['High'].rolling(window=5, center=True).max().dropna()
         recent_lows = df_recent['Low'].rolling(window=5, center=True).min().dropna()
@@ -162,7 +188,7 @@ def analyze_structure(df):
             if high_h and low_h: structure = "Bullish"
             elif recent_highs.iloc[-1] < recent_highs.iloc[-2] and recent_lows.iloc[-1] < recent_lows.iloc[-2]: structure = "Bearish"
 
-    # Logika Fibonacci
+    # Logika Fibonacci (sama)
     max_price = df['High'].max(); min_price = df['Low'].min(); diff = max_price - min_price
     fib_level = {}
     for level in [0.236, 0.382, 0.5, 0.618, 0.786]:
@@ -178,7 +204,7 @@ def analyze_structure(df):
         'fib_bias': fib_bias,
         'high': df['High'].max(), 
         'low': df['Low'].min(),
-        # Menambahkan OB/S/R Proksi: Harga Low terendah dan High tertinggi dalam 14 hari terakhir
+        # OB/S/R Proksi
         'proxy_low': df['Low'].iloc[-14:].min() if len(df) >= 14 else current_close,
         'proxy_high': df['High'].iloc[-14:].max() if len(df) >= 14 else current_close,
     }
@@ -195,7 +221,6 @@ def find_signal_resampled(symbol, user_timeframe):
 
     try:
         analysis_d = analyze_structure(df_daily)
-        
         df_w = df_daily.resample('W').agg(resample_rules).dropna()
         analysis_w = analyze_structure(df_w)
         
@@ -215,47 +240,39 @@ def find_signal_resampled(symbol, user_timeframe):
     proxy_high = analysis_d['proxy_high']
     
     conviction = "Nihil"; bias = "Netral" 
-    entry_price = current_price # Default
+    entry_price = current_price 
     sl_pct = 0; tp1_pct = 0; tp2_pct = 0
     
-    # --- LOGIKA KONVIKSI & PENETAPAN ENTRY SMART MONEY ---
+    # --- LOGIKA KONVIKSI & PENETAPAN ENTRY SMART MONEY (SAMA SEPERTI V20.0) ---
     
-    # 1. KRITERIA TINGGI (3TF + FIB) - RR 2:1 (Ketat)
+    # 1. KRITERIA TINGGI
     if structure_w == 'Bullish' and structure_d == 'Bullish' and structure_user == 'Bullish' and fib_bias_d == 'Bullish': 
-        conviction = "Tinggi"; bias = "Bullish Kuat"
-        tp1_pct = 5; tp2_pct = 10; sl_pct = 2.5 
-        entry_price = proxy_low # Entry BUY di Support terdekat (Low Risk)
+        conviction = "Tinggi"; bias = "Bullish Kuat"; tp1_pct = 5; tp2_pct = 10; sl_pct = 2.5 
+        entry_price = proxy_low 
     elif structure_w == 'Bearish' and structure_d == 'Bearish' and structure_user == 'Bearish' and fib_bias_d == 'Bearish': 
-        conviction = "Tinggi"; bias = "Bearish Kuat"
-        tp1_pct = -5; tp2_pct = -10; sl_pct = -2.5 
-        entry_price = proxy_high # Entry SELL di Resistance terdekat (Low Risk)
+        conviction = "Tinggi"; bias = "Bearish Kuat"; tp1_pct = -5; tp2_pct = -10; sl_pct = -2.5 
+        entry_price = proxy_high
     
-    # 2. KRITERIA SEDANG (2TF Selaras) - RR Fleksibel 3:1
+    # 2. KRITERIA SEDANG
     elif structure_d == 'Bullish' and structure_user == 'Bullish': 
-        conviction = "Sedang"; bias = "Cenderung Bullish"
-        tp1_pct = 3; tp2_pct = 7; sl_pct = 1.0 
-        entry_price = proxy_low * 1.002 # Sedikit di atas Support (Entry Agresif)
+        conviction = "Sedang"; bias = "Cenderung Bullish"; tp1_pct = 3; tp2_pct = 7; sl_pct = 1.0 
+        entry_price = proxy_low * 1.002
     elif structure_d == 'Bearish' and structure_user == 'Bearish': 
-        conviction = "Sedang"; bias = "Cenderung Bearish"
-        tp1_pct = -3; tp2_pct = -7; sl_pct = -1.0 
-        entry_price = proxy_high * 0.998 # Sedikit di bawah Resistance (Entry Agresif)
+        conviction = "Sedang"; bias = "Cenderung Bearish"; tp1_pct = -3; tp2_pct = -7; sl_pct = -1.0 
+        entry_price = proxy_high * 0.998
     
-    # 3. KRITERIA RENDAH (Hanya 1TF User) - RR Agresif 2:1
+    # 3. KRITERIA RENDAH
     elif structure_user == 'Bullish':
-        conviction = "Rendah"; bias = "Bullish Potensial"
-        tp1_pct = 2; tp2_pct = 4; sl_pct = 1.0 
-        entry_price = proxy_low * 1.005 # Entry BUY di atas Support (Entry Pasar)
+        conviction = "Rendah"; bias = "Bullish Potensial"; tp1_pct = 2; tp2_pct = 4; sl_pct = 1.0 
+        entry_price = proxy_low * 1.005 
     elif structure_user == 'Bearish':
-        conviction = "Rendah"; bias = "Bearish Potensial"
-        tp1_pct = -2; tp2_pct = -4; sl_pct = -1.0 
-        entry_price = proxy_high * 0.995 # Entry SELL di bawah Resistance (Entry Pasar)
+        conviction = "Rendah"; bias = "Bearish Potensial"; tp1_pct = -2; tp2_pct = -4; sl_pct = -1.0 
+        entry_price = proxy_high * 0.995 
         
     if conviction in ['Tinggi', 'Sedang', 'Rendah']:
-        # Hitung ulang SL dan TP berdasarkan Entry Price BARU (Entry di S/R)
-        
+        # Hitung ulang SL, TP, dan RR
         sl_multiplier = 1 + (sl_pct / 100) if sl_pct >= 0 else 1 - abs(sl_pct / 100)
         sl_target = entry_price * sl_multiplier
-        
         tp1_target = entry_price * (1 + (tp1_pct / 100))
         tp2_target = entry_price * (1 + (tp2_pct / 100))
         
@@ -264,37 +281,23 @@ def find_signal_resampled(symbol, user_timeframe):
         rr_ratio = reward_amount / risk_amount if risk_amount > 0 else 0
         
         return {
-            # Data Trading & Conviction
             'symbol': symbol, 'bias': bias, 'timeframe': user_timeframe, 'conviction': conviction,
             'entry': entry_price, 'sl_target': sl_target, 'tp1_target': tp1_target, 
             'tp2_target': tp2_target, 't1_pct': tp1_pct, 't2_pct': tp2_pct, 
             'sl_pct': sl_pct, 'rr_ratio': rr_ratio,
-            
-            # Data Analisis Komprehensif (REPORT)
-            'report_w_structure': structure_w,
-            'report_d_structure': structure_d,
-            'report_user_structure': structure_user,
-            'report_fib_bias': fib_bias_d,
-            'report_current_price': current_price,
-            'report_low': analysis_d['low'],
-            'report_high': analysis_d['high'],
-            'report_proxy_low': proxy_low,
+            'report_w_structure': structure_w, 'report_d_structure': structure_d,
+            'report_user_structure': structure_user, 'report_fib_bias': fib_bias_d,
+            'report_current_price': current_price, 'report_proxy_low': proxy_low,
             'report_proxy_high': proxy_high,
         }
     return None
 
 def run_scanner_streamed_sync(coin_universe, timeframe, status_placeholder):
     """Menjalankan pemindaian secara SINKRON (berurutan) - SANGAT STABIL."""
-    
     found_trades = []
     
     for i, symbol in enumerate(coin_universe):
-        # Time logging untuk debugging timeout
-        # start_coin_time = time.time() 
         result = find_signal_resampled(symbol, timeframe)
-        # end_coin_time = time.time()
-        # print(f"Scanned {symbol} in {end_coin_time - start_coin_time:.2f}s") 
-        
         if result:
             found_trades.append(result)
         
@@ -325,24 +328,112 @@ status_placeholder.info(f"Memulai pemindaian instan untuk **{len(BASE_COIN_UNIVE
 found_trades = run_scanner_streamed_sync(BASE_COIN_UNIVERSE, selected_tf, status_placeholder)
 total_time = time.time() - start_time
 
+# --- FUNGSI DISPLAY PEMBANTU (SAMA SEPERTI V20.0) ---
+def format_price(price):
+    if price is None: return "N/A"
+    if price < 0.001: return f"{price:,.8f}"
+    if price < 0.1: return f"{price:,.5f}"
+    if price < 10: return f"{price:,.4f}"
+    return f"{price:,.2f}"
+
+def format_rr(ratio):
+    return f"{ratio:.1f}:1" if ratio > 0 else "0:1"
+    
+def display_report_details(trade):
+    tab1, tab2 = st.tabs(["📊 Trading Params", "🔬 Analisis Komprehensif"])
+
+    with tab1:
+        st.markdown(f"""
+        **Entri Target (OB):** <span class='entry'>{format_price(trade['entry'])}</span>
+        **SL ({abs(trade['sl_pct'])}% dari Entry):** <span class='loss'>{format_price(trade['sl_target'])}</span> | **R/R Aktual:** **{format_rr(trade['rr_ratio'])}**
+        **TP 1 ({abs(trade['t1_pct'])}%):** <span class='profit'>{format_price(trade['tp1_target'])}</span>
+        **TP 2 ({abs(trade['t2_pct'])}%):** <span class='profit'>{format_price(trade['tp2_target'])}</span>
+        """, unsafe_allow_html=True)
+
+    with tab2:
+        def get_trend_color(trend):
+            if 'Bullish' in trend or 'Bullish' in trade['bias']: return 'lime'
+            if 'Bearish' in trend or 'Bearish' in trade['bias']: return 'salmon'
+            return '#5c7e8e'
+        
+        ob_level = trade.get('report_proxy_low') if 'Bullish' in trade['bias'] else trade.get('report_proxy_high')
+        ob_label = "Support OB (Low 14D)" if 'Bullish' in trade['bias'] else "Resistance OB (High 14D)"
+        
+        st.markdown(f"""
+        <div class='report-detail'>
+            <b>HARGA TERAKHIR:</b> {format_price(trade['report_current_price'])}<br>
+            <b>TARGET OB/WALL ({ob_label}):</b> <span style='color:{get_trend_color(trade['bias'])};'>{format_price(ob_level)}</span><br>
+            ---
+            <b>STRUKTUR PASAR:</b><br>
+            • Weekly (1W): <span style='color:{get_trend_color(trade.get('report_w_structure', 'N/A'))};'>{trade.get('report_w_structure', 'N/A')}</span><br>
+            • Daily (1D): <span style='color:{get_trend_color(trade.get('report_d_structure', 'N/A'))};'>{trade.get('report_d_structure', 'N/A')}</span><br>
+            • User TF ({trade['timeframe']}): <span style='color:{get_trend_color(trade.get('report_user_structure', 'N/A'))};'>{trade.get('report_user_structure', 'N/A')}</span><br>
+            <b>KONF. FIBONACCI:</b> {trade.get('report_fib_bias', 'N/A')}
+        </div>
+        """, unsafe_allow_html=True)
+
 # --- TAMPILKAN HASIL AKHIR ---
 status_placeholder.empty()
 
-# Hitung Persentase Sinyal
 total_coins_scanned = len(BASE_COIN_UNIVERSE)
 total_signals = len(found_trades)
 signal_percentage = (total_signals / total_coins_scanned) * 100 if total_coins_scanned > 0 else 0
 
 if not found_trades:
-    st.success(f"✅ Pemindaian selesai dalam **{total_time:.2f} detik**. Tidak ditemukan sinyal yang bisa di-tradingkan.")
+    
+    # KASUS KRITIS: SINYAL NIHIL -> TAMPILKAN TOP & BOTTOM MOVERS
+    st.warning(f"⚠️ Pemindaian selesai dalam **{total_time:.2f} detik**. Tidak ditemukan sinyal *Market Structure* yang kuat saat ini.")
+    st.header("⚡ Laporan Koin Penggerak (24 Jam) - Alternatif Trading")
+    
+    movers = fetch_24hr_movers(BASE_COIN_UNIVERSE)
+    if movers:
+        # Urutkan untuk mendapatkan Top Bullish dan Top Bearish
+        movers.sort(key=lambda x: x['change_pct'], reverse=True)
+        top_bullish = movers[:3]
+        top_bearish = movers[-3:][::-1] # 3 terendah, lalu dibalik
+
+        cols_movers = st.columns(3)
+        with cols_movers[0]:
+            st.subheader("📈 Top 3 Bullish Movers")
+            for mover in top_bullish:
+                color = 'lime' if mover['change_pct'] > 0 else 'salmon'
+                st.markdown(f"""
+                <div class='signal-card'>
+                    **{mover['symbol']}**<br>
+                    <span style='color:{color}; font-weight:bold;'>{mover['change_pct']:.2f}%</span>
+                    <p class='mover-price'>Harga: {format_price(mover['price'])}</p>
+                </div>
+                """, unsafe_allow_html=True)
+
+        with cols_movers[1]:
+            st.subheader("📉 Top 3 Bearish Movers")
+            for mover in top_bearish:
+                color = 'salmon' if mover['change_pct'] < 0 else 'lime'
+                st.markdown(f"""
+                <div class='signal-card'>
+                    **{mover['symbol']}**<br>
+                    <span style='color:{color}; font-weight:bold;'>{mover['change_pct']:.2f}%</span>
+                    <p class='mover-price'>Harga: {format_price(mover['price'])}</p>
+                </div>
+                """, unsafe_allow_html=True)
+        
+        with cols_movers[2]:
+             st.subheader("ℹ️ Informasi")
+             st.info("Koin ini memiliki pergerakan harga 24 jam tertinggi. Analisis ini tidak mencakup struktur teknikal (hanya perubahan harga murni).")
+    
+    else:
+        st.error("Gagal memuat data pergerakan 24 jam. Koneksi mungkin terganggu.")
+
 else:
+    # KASUS: SINYAL DITEMUKAN -> TAMPILKAN SINYAL RENDAH, SEDANG, TINGGI
+    
     st.success(f"""
         ✅ Pemindaian selesai dalam **{total_time:.2f} detik**. 
         Ditemukan {total_signals} sinyal potensial dari {total_coins_scanned} koin.
         **Status Pasar (Sinyal Sedang/Tinggi/Rendah):** <span class='highlight-pct'>{signal_percentage:.2f}%</span> dari koin yang dipindai.
     """, unsafe_allow_html=True)
     
-    # 1. Pisahkan dan Urutkan sinyal berdasarkan Conviction (Tinggi > Sedang > Rendah)
+    # Pisahkan dan Urutkan
     high_conviction = [t for t in found_trades if t['conviction'] == 'Tinggi']
     medium_conviction = [t for t in found_trades if t['conviction'] == 'Sedang']
     low_conviction = [t for t in found_trades if t['conviction'] == 'Rendah']
@@ -351,59 +442,9 @@ else:
                   sorted(medium_conviction, key=lambda x: x['symbol']) + \
                   sorted(low_conviction, key=lambda x: x['symbol'])
 
-    # 2. Ambil 3 Koin Teratas
     top_3_signals = all_signals[:3]
     
-    # Fungsi Pembantu untuk Format Harga
-    def format_price(price):
-        if price is None: return "N/A"
-        if price < 0.001: return f"{price:,.8f}"
-        if price < 0.1: return f"{price:,.5f}"
-        if price < 10: return f"{price:,.4f}"
-        return f"{price:,.2f}"
-    
-    # Fungsi Pembantu untuk Format RR Ratio
-    def format_rr(ratio):
-        return f"{ratio:.1f}:1" if ratio > 0 else "0:1"
-        
-    # Fungsi Pembantu untuk menampilkan Report Analisis
-    def display_report_details(trade):
-        tab1, tab2 = st.tabs(["📊 Trading Params", "🔬 Analisis Komprehensif"])
-
-        with tab1:
-            st.markdown(f"""
-            **Entri Target (OB):** <span class='entry'>{format_price(trade['entry'])}</span>
-            **SL ({abs(trade['sl_pct'])}% dari Entry):** <span class='loss'>{format_price(trade['sl_target'])}</span> | **R/R Aktual:** **{format_rr(trade['rr_ratio'])}**
-            **TP 1 ({abs(trade['t1_pct'])}%):** <span class='profit'>{format_price(trade['tp1_target'])}</span>
-            **TP 2 ({abs(trade['t2_pct'])}%):** <span class='profit'>{format_price(trade['tp2_target'])}</span>
-            """, unsafe_allow_html=True)
-
-        with tab2:
-            def get_trend_color(trend):
-                if 'Bullish' in trend or 'Bullish' in trade['bias']: return 'lime'
-                if 'Bearish' in trend or 'Bearish' in trade['bias']: return 'salmon'
-                return '#5c7e8e'
-            
-            # Label OB yang digunakan untuk Entry
-            ob_level = trade.get('report_proxy_low') if 'Bullish' in trade['bias'] else trade.get('report_proxy_high')
-            ob_label = "Support OB (Low 14D)" if 'Bullish' in trade['bias'] else "Resistance OB (High 14D)"
-            
-            st.markdown(f"""
-            <div class='report-detail'>
-                <b>HARGA TERAKHIR:</b> {format_price(trade['report_current_price'])}<br>
-                <b>TARGET OB/WALL ({ob_label}):</b> <span style='color:{get_trend_color(trade['bias'])};'>{format_price(ob_level)}</span><br>
-                ---
-                <b>STRUKTUR PASAR:</b><br>
-                • Weekly (1W): <span style='color:{get_trend_color(trade.get('report_w_structure', 'N/A'))};'>{trade.get('report_w_structure', 'N/A')}</span><br>
-                • Daily (1D): <span style='color:{get_trend_color(trade.get('report_d_structure', 'N/A'))};'>{trade.get('report_d_structure', 'N/A')}</span><br>
-                • User TF ({trade['timeframe']}): <span style='color:{get_trend_color(trade.get('report_user_structure', 'N/A'))};'>{trade.get('report_user_structure', 'N/A')}</span><br>
-                <b>KONF. FIBONACCI:</b> {trade.get('report_fib_bias', 'N/A')}
-            </div>
-            """, unsafe_allow_html=True)
-
-
-    # --- TAMPILAN KATEGORI SINYAL ---
-    
+    # --- TAMPILAN TOP 3 KOIN ---
     if top_3_signals:
         st.header("🏆 Top 3 Sinyal Kuat (Rekomendasi Trading)")
         cols_top = st.columns(3)
@@ -421,7 +462,7 @@ else:
 
     st.markdown("---") 
     
-    # Sinyal TINGGI
+    # 3. Tampilkan Sinyal Keyakinan TINGGI
     if high_conviction:
         st.subheader("🔥 Sinyal Keyakinan TINGGI"); num_cols = 4; cols = st.columns(num_cols)
         for i, trade in enumerate(high_conviction):
@@ -432,7 +473,7 @@ else:
                     st.markdown(f"**Sinyal:** <strong style='color:{color};'>{trade['bias']}</strong>", unsafe_allow_html=True)
                     display_report_details(trade)
                     
-    # Sinyal SEDANG
+    # 4. Tampilkan Sinyal Keyakinan SEDANG
     if medium_conviction:
         st.subheader("👍 Sinyal Keyakinan SEDANG (Low Risk Entry)"); num_cols = 4; cols = st.columns(num_cols)
         for i, trade in enumerate(medium_conviction):
@@ -443,7 +484,7 @@ else:
                     st.markdown(f"**Sinyal:** <strong style='color:{color};'>{trade['bias']}</strong>", unsafe_allow_html=True)
                     display_report_details(trade)
                     
-    # Sinyal RENDAH
+    # 5. Tampilkan Sinyal Keyakinan RENDAH
     if low_conviction:
         st.subheader("⚪ Sinyal Keyakinan RENDAH (Entry Pasar Terdekat)"); num_cols = 4; cols = st.columns(num_cols)
         for i, trade in enumerate(low_conviction):
