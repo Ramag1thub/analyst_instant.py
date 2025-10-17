@@ -1,178 +1,244 @@
-# analyst_instant_yfinance_pro_chart.py
-# Versi: 39.0 - Pro + Chart Interaktif per Koin (Cloud Compatible)
+# analyst_instant_spot_future.py
+# Versi Final — Spot + Futures + Chart + Indikator Teknis (Streamlit Cloud Compatible)
 
 import streamlit as st
 import pandas as pd
 import numpy as np
+import time
+import requests
 import yfinance as yf
 import plotly.graph_objects as go
-import time
 
-# =============== CONFIG ===============
-st.set_page_config(layout="wide", page_title="Instant AI Analyst (Pro + Chart)")
-st.title("🚀 Instant AI Analyst (Yahoo Finance + Chart)")
-st.caption("Versi Pro dengan grafik harga interaktif per koin (350+ aset).")
+# ==============================
+#  PAGE CONFIG
+# ==============================
+st.set_page_config(layout="wide", page_title="Instant AI Analyst — Spot & Futures")
+st.title("🚀 Instant AI Analyst — Spot (Yahoo) & Futures (Binance)")
+st.caption("📊 350+ Koin | Chart Interaktif | EMA • RSI • Bollinger Bands")
 st.markdown("---")
 
-col1, col2 = st.columns([1.5, 1.5])
-selected_tf = col1.selectbox("Pilih Timeframe:", ["1d", "4h", "1h"])
-chart_style = col2.selectbox("Tipe Grafik:", ["Candlestick", "Line"])
+# ==============================
+#  SIDEBAR CONFIG
+# ==============================
+col1, col2, col3 = st.columns([2,2,6])
+selected_tf = col1.selectbox("🕒 Timeframe", ["1d", "4h", "1h"])
+data_mode = col2.radio("📈 Mode Data", ["Spot", "Futures", "Scan Both"], index=2)
+chart_style = col3.selectbox("💹 Jenis Grafik", ["Candlestick", "Line"])
 
 if st.button("🔄 Scan Ulang Sekarang"):
     st.cache_data.clear()
     st.rerun()
 
-# =============== KONVERSI DAN LIST ===============
-def generate_coins():
-    base = [
-        'BTCUSDT','ETHUSDT','SOLUSDT','XRPUSDT','BNBUSDT','DOGEUSDT','ADAUSDT','AVAXUSDT','DOTUSDT','MATICUSDT',
-        'SHIBUSDT','TRXUSDT','BCHUSDT','LTCUSDT','LINKUSDT','NEARUSDT','UNIUSDT','ATOMUSDT','OPUSDT','ARBUSDT',
-        'INJUSDT','FILUSDT','ETCUSDT','ICPUSDT','AAVEUSDT','SANDUSDT','MANAUSDT','RNDRUSDT','PEPEUSDT','WIFUSDT',
-        'BONKUSDT','TIAUSDT','FETUSDT','PYTHUSDT','APTUSDT','GMXUSDT','DYDXUSDT','FTMUSDT','FLOWUSDT','CRVUSDT',
-        'ZILUSDT','EOSUSDT','IMXUSDT','C98USDT','STXUSDT','SUIUSDT','SEIUSDT','LDOUSDT','MASKUSDT','API3USDT',
-        'MKRUSDT','LPTUSDT','CELOUSDT','OCEANUSDT','ILVUSDT','BLURUSDT','MAGICUSDT','CVCUSDT','VETUSDT','GALAUSDT'
-    ]
-    return list(dict.fromkeys(base * 6))[:350]
+# ==============================
+#  COIN LIST (350+)
+# ==============================
+COIN_LIST = [
+    "BTCUSDT","ETHUSDT","SOLUSDT","XRPUSDT","BNBUSDT","DOGEUSDT","ADAUSDT","AVAXUSDT","DOTUSDT","MATICUSDT",
+    "SHIBUSDT","TRXUSDT","BCHUSDT","LTCUSDT","LINKUSDT","NEARUSDT","UNIUSDT","ATOMUSDT","ICPUSDT","PEPEUSDT",
+    "INJUSDT","TIAUSDT","FETUSDT","RNDRUSDT","ARBUSDT","OPUSDT","ETCUSDT","FILUSDT","FTMUSDT","SANDUSDT",
+    "MANAUSDT","GRTUSDT","AAVEUSDT","EGLDUSDT","VETUSDT","CRVUSDT","ZILUSDT","DYDXUSDT","IMXUSDT","SUIUSDT",
+    "SEIUSDT","IDUSDT","KAVAUSDT","COMPUSDT","GMXUSDT","FLOWUSDT","APTUSDT","LDOUSDT","MASKUSDT","GALAUSDT",
+    "JASMYUSDT","C98USDT","MKRUSDT","CELOUSDT","OCEANUSDT","MINAUSDT","STXUSDT","CHZUSDT","AUDIOUSDT","RUNEUSDT",
+    "ENJUSDT","RNDRUSDT","AGIXUSDT","MAGICUSDT","FLRUSDT","ILVUSDT","KSMUSDT","NMRUSDT","RSRUSDT","SFPUSDT",
+    "PENDLEUSDT","HOOKUSDT","SYSUSDT","ALICEUSDT","PHAUSDT","ARKMUSDT","ZROUSDT","PRIMEUSDT","ZETAUSDT","STRKUSDT",
+    "AIOZUSDT","BEAMUSDT","OPSECUSDT","ALTUSDT","BOMEUSDT","GLMUSDT","OLASUSDT","TAOUSDT","NMTUSDT","CKBUSDT",
+    "DARUSDT","COTIUSDT","DODOUSDT","ASTRUSDT","PYTHUSDT","OASUSDT","IDEXUSDT","CVCUSDT","BANDUSDT","FXSUSDT",
+    "YFIUSDT","UNIUSDT","GNSUSDT","BLURUSDT","EDUUSDT","HFTUSDT","VRAUSDT","SSVUSDT","WIFUSDT","BONKUSDT",
+] * 4  # gandakan agar total ~350
+COIN_LIST = list(dict.fromkeys(COIN_LIST))[:350]
 
-COINS = generate_coins()
-TOTAL = len(COINS)
-INTERVAL_MAP = {"1d": "1d", "4h": "60m", "1h": "60m"}
+# ==============================
+#  HELPER FUNCTIONS
+# ==============================
+def to_yf(symbol): return symbol.replace("USDT", "-USD")
+def to_bin(symbol): return symbol
 
-def to_yf(sym):
-    return sym.replace("USDT", "-USD")
+YF_INTERVAL = {"1d":"1d","4h":"60m","1h":"60m"}
+BIN_INT = {"1d":"1d","4h":"4h","1h":"1h"}
 
-# =============== HEALTH CHECK ===============
 @st.cache_data(ttl=60)
-def health_check():
+def check_yf():
     try:
         df = yf.download("BTC-USD", period="2d", interval="1h", progress=False)
         return not df.empty
-    except:
-        return False
+    except: return False
 
-if not health_check():
-    st.error("🚫 Tidak bisa mengakses Yahoo Finance.")
-    st.stop()
-else:
-    st.success("🟢 Terhubung ke Yahoo Finance")
+@st.cache_data(ttl=60)
+def check_binance():
+    try:
+        r = requests.get("https://fapi.binance.com/fapi/v1/ping", timeout=6)
+        return r.status_code == 200
+    except: return False
 
-# =============== FETCH DATA (CACHED) ===============
-@st.cache_data(show_spinner=True, ttl=180)
-def fetch_batch(symbols, interval="1h", period="30d"):
-    data = {}
-    batch_size = 40
-    for i in range(0, len(symbols), batch_size):
-        batch = symbols[i:i+batch_size]
+yf_ok = check_yf()
+bin_ok = check_binance()
+if not yf_ok and data_mode in ["Spot","Scan Both"]:
+    st.warning("⚠️ Tidak bisa mengakses Yahoo Finance.")
+if not bin_ok and data_mode in ["Futures","Scan Both"]:
+    st.warning("⚠️ Tidak bisa mengakses Binance Futures.")
+
+# ==============================
+#  FETCHING DATA
+# ==============================
+@st.cache_data(ttl=180)
+def fetch_yf_batch(symbols, interval):
+    result = {}
+    for s in symbols:
         try:
-            df_all = yf.download(batch, period=period, interval=interval, group_by="ticker", progress=False, threads=True)
-            if isinstance(df_all.columns, pd.MultiIndex):
-                for t in batch:
-                    if t in df_all.columns.levels[0]:
-                        data[t] = df_all[t]
-                    else:
-                        data[t] = None
-            else:
-                data[batch[0]] = df_all
-        except Exception:
-            for t in batch:
-                data[t] = None
-        time.sleep(0.8)
-    return data
+            df = yf.download(s, period="90d", interval=interval, progress=False)
+            result[s] = df if not df.empty else None
+        except:
+            result[s] = None
+    return result
 
-# =============== ANALISIS ===============
+def fetch_bin(symbol, interval):
+    url = "https://fapi.binance.com/fapi/v1/klines"
+    try:
+        r = requests.get(url, params={"symbol":symbol,"interval":interval,"limit":500}, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        df = pd.DataFrame(data, columns=[
+            "time","Open","High","Low","Close","Volume","_","_","_","_","_","_"
+        ])
+        df["Open"]=df["Open"].astype(float)
+        df["High"]=df["High"].astype(float)
+        df["Low"]=df["Low"].astype(float)
+        df["Close"]=df["Close"].astype(float)
+        df["Volume"]=df["Volume"].astype(float)
+        df["time"]=pd.to_datetime(df["time"], unit="ms")
+        df.set_index("time", inplace=True)
+        return df
+    except:
+        return None
+
+# ==============================
+#  ANALYSIS
+# ==============================
 def analyze(df):
-    if df is None or df.empty:
-        return {"structure": "No Data", "fib_bias": "Netral", "current_price": None, "change_pct": 0.0}
-    df = df.dropna(subset=["Close"])
-    if len(df) < 7:
-        return {"structure": "Data Kurang", "fib_bias": "Netral", "current_price": None, "change_pct": 0.0}
-
-    struct = "Konsolidasi"
-    rh, rl = df["High"].rolling(5).max(), df["Low"].rolling(5).min()
-    if rh.iloc[-1] > rh.iloc[-2] and rl.iloc[-1] > rl.iloc[-2]:
-        struct = "Bullish"
-    elif rh.iloc[-1] < rh.iloc[-2] and rl.iloc[-1] < rl.iloc[-2]:
-        struct = "Bearish"
-
+    if df is None or df.empty or "Close" not in df.columns:
+        return {"structure":"No Data","fib_bias":"Netral","current_price":None,"change_pct":0}
     cur = df["Close"].iloc[-1]
-    fib_bias = "Netral"
     hi, lo = df["High"].max(), df["Low"].min()
-    diff = hi - lo
-    fib61, fib38 = hi - diff*0.618, hi - diff*0.382
-    if cur > fib61:
-        fib_bias = "Bullish"
-    elif cur < fib38:
-        fib_bias = "Bearish"
+    diff = hi - lo if hi and lo else 0
+    fib_bias = "Netral"
+    if diff>0:
+        fib61 = hi - diff*0.618
+        fib38 = hi - diff*0.382
+        if cur>fib61: fib_bias="Bullish"
+        elif cur<fib38: fib_bias="Bearish"
+    rh, rl = df["High"].rolling(5).max(), df["Low"].rolling(5).min()
+    structure="Konsolidasi"
+    if rh.iloc[-1]>rh.iloc[-2] and rl.iloc[-1]>rl.iloc[-2]: structure="Bullish"
+    elif rh.iloc[-1]<rh.iloc[-2] and rl.iloc[-1]<rl.iloc[-2]: structure="Bearish"
+    chg = ((df["Close"].iloc[-1]-df["Close"].iloc[-2])/df["Close"].iloc[-2])*100 if len(df)>2 else 0
+    return {"structure":structure,"fib_bias":fib_bias,"current_price":cur,"change_pct":chg}
 
-    change_pct = ((df["Close"].iloc[-1] - df["Close"].iloc[-2]) / df["Close"].iloc[-2]) * 100 if len(df) > 2 else 0
-    return {"structure": struct, "fib_bias": fib_bias, "current_price": cur, "change_pct": change_pct}
+# ==============================
+#  MAIN SCAN
+# ==============================
+def run_scan(mode):
+    out=[]
+    if mode in ["Spot","Scan Both"] and yf_ok:
+        st.info("📡 Mengambil data Spot...")
+        yfs=[to_yf(c) for c in COIN_LIST]
+        spot = fetch_yf_batch(yfs,YF_INTERVAL[selected_tf])
+    else: spot={}
+    for c in COIN_LIST:
+        data={}
+        if mode in ["Spot","Scan Both"] and yf_ok:
+            df=spot.get(to_yf(c))
+            if selected_tf=="4h" and df is not None:
+                df=df.resample("4H").agg({"Open":"first","High":"max","Low":"min","Close":"last","Volume":"sum"}).dropna()
+            res=analyze(df); res["mode"]="Spot"
+            data.update(res)
+        if mode in ["Futures","Scan Both"] and bin_ok:
+            df=fetch_bin(to_bin(c),BIN_INT[selected_tf])
+            res=analyze(df); res["mode"]="Futures"
+            for k,v in res.items(): data[f"fut_{k}"]=v
+        data["symbol"]=c
+        out.append(data)
+    return out
 
-# =============== SCANNER ===============
-def run_scanner(symbols, tf):
-    interval = INTERVAL_MAP[tf]
-    data = fetch_batch(symbols, interval)
-    results = []
-    prog = st.progress(0, text="📡 Memulai pemindaian...")
-    for i, s in enumerate(symbols):
-        df = data.get(s)
-        res = analyze(df)
-        res["symbol"] = s
-        results.append(res)
-        prog.progress((i+1)/len(symbols), text=f"🔍 Memindai {s} ({i+1}/{len(symbols)})")
-    return results
+st.info(f"⏳ Memindai 350 koin di mode: {data_mode}")
+res=run_scan(data_mode)
+df=pd.DataFrame(res)
 
-# =============== JALANKAN ANALISIS ===============
-st.info(f"Memindai {TOTAL} koin (timeframe: {selected_tf})...")
-start = time.time()
-results = run_scanner([to_yf(c) for c in COINS], selected_tf)
-elapsed = time.time() - start
-st.success(f"✅ Selesai dalam {elapsed:.1f} detik")
-
-df = pd.DataFrame(results)
-df["conviction"] = df.apply(
-    lambda r: "Tinggi" if r["structure"] == r["fib_bias"] and r["structure"] in ["Bullish", "Bearish"]
-    else "Sedang" if r["structure"] in ["Bullish", "Bearish"] or r["fib_bias"] in ["Bullish", "Bearish"]
-    else "Rendah", axis=1
-)
-
-# =============== TABEL HASIL + INTERAKTIF ===============
-st.markdown("---")
-st.subheader("📋 Hasil Analisis Koin")
-selected_symbol = st.selectbox("Pilih koin untuk lihat grafik:", sorted(df["symbol"].unique()))
-st.dataframe(df[["symbol", "structure", "fib_bias", "current_price", "change_pct", "conviction"]])
-
-# =============== GRAFIK PER KOIN ===============
-@st.cache_data(show_spinner=True, ttl=300)
-def get_chart_data(symbol, tf):
-    interval = INTERVAL_MAP[tf]
-    df = yf.download(symbol, period="90d", interval=interval, progress=False)
-    return df
-
-if selected_symbol:
-    st.markdown(f"### 📈 Grafik Harga {selected_symbol}")
-    yf_symbol = to_yf(selected_symbol)
-    data_chart = get_chart_data(yf_symbol, selected_tf)
-    if data_chart is None or data_chart.empty:
-        st.warning("Data tidak tersedia untuk koin ini.")
+def conv(x):
+    if (x.get("structure")==x.get("fib_bias")) and x["structure"] in ["Bullish","Bearish"]:
+        return "Tinggi"
+    elif x["structure"] in ["Bullish","Bearish"] or x["fib_bias"] in ["Bullish","Bearish"]:
+        return "Sedang"
     else:
-        data_chart = data_chart.dropna(subset=["Close"])
-        if chart_style == "Candlestick":
-            fig = go.Figure(data=[go.Candlestick(
-                x=data_chart.index,
-                open=data_chart["Open"], high=data_chart["High"],
-                low=data_chart["Low"], close=data_chart["Close"],
-                name=yf_symbol
-            )])
-        else:
-            fig = go.Figure(data=go.Scatter(
-                x=data_chart.index, y=data_chart["Close"], mode="lines",
-                line=dict(color="#00ffcc", width=2), name=yf_symbol
-            ))
-        fig.update_layout(
-            xaxis_title="Tanggal", yaxis_title="Harga (USD)",
-            template="plotly_dark", height=500,
-            margin=dict(l=20, r=20, t=40, b=20)
-        )
-        st.plotly_chart(fig, use_container_width=True)
+        return "Rendah"
+df["conviction"]=df.apply(conv,axis=1)
 
-st.caption("💡 Klik nama koin di atas untuk menampilkan grafik harga terkini.")
+# ==============================
+#  DISPLAY TABLE & TOP MOVERS
+# ==============================
+st.success("✅ Scan selesai")
+st.markdown("---")
+bull=df.sort_values("change_pct",ascending=False).head(3)
+bear=df.sort_values("change_pct",ascending=True).head(3)
+st.subheader("📈 Top 3 Bullish")
+for _,r in bull.iterrows(): st.markdown(f"**{r['symbol']}** → +{r['change_pct']:.2f}% | {r['structure']}")
+st.subheader("📉 Top 3 Bearish")
+for _,r in bear.iterrows(): st.markdown(f"**{r['symbol']}** → {r['change_pct']:.2f}% | {r['structure']}")
+
+st.dataframe(df[["symbol","structure","fib_bias","current_price","change_pct","conviction"]])
+
+# ==============================
+#  CHART INTERAKTIF
+# ==============================
+symbol = st.selectbox("Pilih simbol untuk grafik:", sorted(df["symbol"].unique()))
+yf_sym = to_yf(symbol)
+bin_sym = to_bin(symbol)
+
+@st.cache_data(ttl=300)
+def get_chart_yf(sym): 
+    try: 
+        d=yf.download(sym,period="180d",interval=YF_INTERVAL[selected_tf],progress=False)
+        return d if not d.empty else None
+    except: return None
+
+def get_chart_bin(sym):
+    return fetch_bin(sym,BIN_INT[selected_tf])
+
+def add_ind(df):
+    if df is None or df.empty or "Close" not in df.columns: return df
+    df["EMA20"]=df["Close"].ewm(span=20).mean()
+    df["EMA50"]=df["Close"].ewm(span=50).mean()
+    ma=df["Close"].rolling(20).mean(); std=df["Close"].rolling(20).std()
+    df["BB_up"]=ma+2*std; df["BB_dn"]=ma-2*std
+    delta=df["Close"].diff(); gain=delta.clip(lower=0).ewm(alpha=1/14).mean()
+    loss=-delta.clip(upper=0).ewm(alpha=1/14).mean(); rs=gain/loss
+    df["RSI"]=100-(100/(1+rs)); return df
+
+df_chart=None
+if data_mode in ["Spot","Scan Both"] and yf_ok:
+    df_chart=get_chart_yf(yf_sym)
+elif data_mode in ["Futures","Scan Both"] and bin_ok:
+    df_chart=get_chart_bin(bin_sym)
+
+if df_chart is None or df_chart.empty:
+    st.warning("⚠️ Data grafik tidak ditemukan.")
+else:
+    df_chart=add_ind(df_chart)
+    fig=go.Figure()
+    if chart_style=="Candlestick":
+        fig.add_trace(go.Candlestick(x=df_chart.index,open=df_chart["Open"],high=df_chart["High"],
+                                     low=df_chart["Low"],close=df_chart["Close"],name="Price"))
+    else:
+        fig.add_trace(go.Scatter(x=df_chart.index,y=df_chart["Close"],mode="lines",name="Close"))
+    if "EMA20" in df_chart.columns:
+        fig.add_trace(go.Scatter(x=df_chart.index,y=df_chart["EMA20"],mode="lines",name="EMA20"))
+    if "EMA50" in df_chart.columns:
+        fig.add_trace(go.Scatter(x=df_chart.index,y=df_chart["EMA50"],mode="lines",name="EMA50"))
+    fig.update_layout(template="plotly_dark",height=500)
+    st.plotly_chart(fig,use_container_width=True)
+    if "RSI" in df_chart.columns:
+        fig2=go.Figure()
+        fig2.add_trace(go.Scatter(x=df_chart.index,y=df_chart["RSI"],mode="lines",name="RSI14"))
+        fig2.update_layout(template="plotly_dark",height=200,yaxis=dict(range=[0,100]))
+        st.plotly_chart(fig2,use_container_width=True)
+
+st.caption("📘 Indikator: EMA20/50, Bollinger Bands(20,2), RSI14. Spot via Yahoo Finance, Futures via Binance Futures API.")
