@@ -1,5 +1,5 @@
 # File: analyst_instant.py
-# Versi: 16.0 - FINAL STABIL DAN BEBAS ERROR (Mode Sinkron)
+# Versi: 16.1 - FIX: SyntaxError 'dan' ke 'and' (Final Stabil)
 # Tujuan: Stabilitas maksimum, mengatasi semua error, dan menggunakan logika RR 3:1 fleksibel.
 
 import streamlit as st
@@ -74,7 +74,7 @@ BASE_COIN_UNIVERSE = [
     'AIOZ/USDT', 'ALICE/USDT', 'ANKR/USDT', 'APENFT/USDT', 'API3/USDT', 'ARPA/USDT',
     'AUCTION/USDT', 'BSW/USDT', 'C98/USDT', 'CELR/USDT', 'CTK/USDT', 'DREP/USDT',
     'FIS/USDT', 'FLM/USDT', 'FLOW/USDT', 'GTC/USDT', 'HBAR/USDT',
-    'IDEX/USDT', 'IOST/USDT', 'IRIS/USDT', 'JASMY/USDT', 'KLAY/USDT', 'LPT/USDT', 'LTO/USDT',
+    'IDEX/USDT', 'IOST/USDT', 'IOTA/USDT', 'IRIS/USDT', 'JASMY/USDT', 'KLAY/USDT', 'LPT/USDT', 'LTO/USDT',
     'NANO/USDT', 'OXT/USDT', 'PAXG/USDT', 'PHB/USDT', 'PUNDIX/USDT', 'QNT/USDT',
     'RAY/USDT', 'RIF/USDT', 'RLC/USDT', 'RSR/USDT', 'RUNE/USDT', 'SXP/USDT', 'T/USDT',
     'TRB/USDT', 'TRU/USDT', 'TUSD/USDT', 'UMA/USDT', 'UNFI/USDT', 'UTK/USDT', 'VIB/USDT', 'WEMIX/USDT', 'XYO/USDT', 'ZKS/USDT', 'ZRO/USDT'
@@ -106,16 +106,14 @@ st.markdown(INSTANT_CSS, unsafe_allow_html=True)
 def fetch_daily_data(symbol, days=365):
     """Mengambil data harian SINKRON dari Bybit (Sumber Utama)."""
     
-    # Inisialisasi exchange sinkron
     exchange = ccxt.bybit({ 
         'options': {'defaultType': 'future'},
-        'timeout': 15000 # Timeout lebih lama untuk menghindari kegagalan fetch 
+        'timeout': 15000
     }) 
     
     df = None
     try:
         since = exchange.milliseconds() - 86400000 * days
-        # Panggil fetch_ohlcv sinkron
         bars = exchange.fetch_ohlcv(symbol, '1d', since=since)
         if bars:
             df = pd.DataFrame(bars, columns=['timestamp', 'Open', 'High', 'Low', 'Close', 'Volume'])
@@ -204,7 +202,8 @@ def find_signal_resampled(symbol, user_timeframe):
     elif structure_d == 'Bullish' and structure_user == 'Bullish': 
         conviction = "Sedang"; bias = "Cenderung Bullish"
         tp1_pct = 3; tp2_pct = 7; sl_pct = 1.0 
-    elif structure_d == 'Bearish' dan structure_user == 'Bearish': 
+    # BARIS YANG DIPERBAIKI: Mengubah 'dan' menjadi 'and'
+    elif structure_d == 'Bearish' and structure_user == 'Bearish': 
         conviction = "Sedang"; bias = "Cenderung Bearish"
         tp1_pct = -3; tp2_pct = -7; sl_pct = -1.0 
 
@@ -234,6 +233,7 @@ def run_scanner_streamed_sync(coin_universe, timeframe, status_placeholder):
     found_trades = []
     
     for i, symbol in enumerate(coin_universe):
+        # Sinyal SINKRON (berurutan)
         result = find_signal_resampled(symbol, timeframe)
         if result:
             found_trades.append(result)
@@ -263,6 +263,8 @@ start_time = time.time()
 
 status_placeholder.info(f"Memulai pemindaian instan untuk **{len(BASE_COIN_UNIVERSE)} koin** secara berurutan...")
 
+# Panggilan utama SINKRON
+# Gunakan BASE_COIN_UNIVERSE secara langsung karena tidak ada discovery koin
 found_trades = run_scanner_streamed_sync(BASE_COIN_UNIVERSE, selected_tf, status_placeholder)
 total_time = time.time() - start_time
 
