@@ -632,4 +632,3 @@ else:
                     st.caption(f"Timeframe: {selected_tf}")
                     
                     display_report_details(trade)
-                    
