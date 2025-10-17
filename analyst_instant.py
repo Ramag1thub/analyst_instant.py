@@ -1,27 +1,23 @@
 # File: analyst_instant.py
-# Versi: 16.2 - STABILITAS TOTAL (Mode Sinkron, Fix Impor & Timezone)
-# Tujuan: Menghilangkan semua error yang dilaporkan melalui kontrol versi dan struktur.
+# Versi: 16.3 - FINAL STABILITAS (Menggunakan Binance USD-M Futures)
+# Tujuan: Stabilitas maksimum, mengatasi semua error, dan mendapatkan data Perpetual Futures yang luas.
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 import time
 
-# --- PENTING: Menggunakan CCXT Sinkron (Hanya ccxt) ---
+# --- PENTING: Menggunakan CCXT Sinkron ---
 try:
     import ccxt 
 except ImportError:
-    # Ini akan menjadi error terakhir yang mungkin Anda lihat jika instalasi gagal total.
-    st.error("FATAL ERROR: Gagal mengimpor ccxt. Mohon periksa kembali file requirements.txt dan pastikan telah di-deploy dengan benar.")
+    st.error("FATAL ERROR: Gagal mengimpor ccxt. Mohon periksa requirements.txt (hanya ccxt, pandas, numpy, streamlit).")
     st.stop()
 
 
-# --- KONSTANTA OPTIMASI GLOBAL ---
-# Tidak ada kode asinkron di versi ini.
-
 # --- DAFTAR KOIN DASAR (350+ SIMBOL PERPETUAL USDT) ---
 BASE_COIN_UNIVERSE = [
-    # --- DAFTAR LENGKAP KOIN (350+) ---
+    # --- DAFTAR LENGKAP KOIN (350+ total) ---
     'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'DOGE/USDT', 'BNB/USDT', 'ADA/USDT',
     'AVAX/USDT', 'LINK/USDT', 'DOT/USDT', 'MATIC/USDT', 'SHIB/USDT', 'TRX/USDT', 'BCH/USDT',
     'LTC/USDT', 'NEAR/USDT', 'UNI/USDT', 'ICP/USDT', 'PEPE/USDT', 'TON/USDT', 'KAS/USDT',
@@ -100,13 +96,14 @@ INSTANT_CSS = """
 """
 st.markdown(INSTANT_CSS, unsafe_allow_html=True)
 
-# --- FUNGSI UTAMA (SINKRON, NON-ASYNC) ---
+# --- FUNGSI UTAMA (SINKRON) ---
 
 @st.cache_data(show_spinner=False, ttl=3600)
 def fetch_daily_data(symbol, days=365):
-    """Mengambil data harian SINKRON dari Bybit (Sumber Utama)."""
+    """Mengambil data harian SINKRON dari BINANCE FUTURES (Mode Stabilitas Tinggi)."""
     
-    exchange = ccxt.bybit({ 
+    # PERUBAHAN KRITIS: Menggunakan Binanceusdm untuk Futures yang lebih stabil
+    exchange = ccxt.binanceusdm({ 
         'options': {'defaultType': 'future'},
         'timeout': 15000 
     }) 
@@ -114,7 +111,8 @@ def fetch_daily_data(symbol, days=365):
     df = None
     try:
         since = exchange.milliseconds() - 86400000 * days
-        bars = exchange.fetch_ohlcv(symbol, '1d', since=since)
+        # Tipe pasar diatur di konfigurasi, jadi panggil fetch_ohlcv standar
+        bars = exchange.fetch_ohlcv(symbol, '1d', since=since) 
         if bars:
             df = pd.DataFrame(bars, columns=['timestamp', 'Open', 'High', 'Low', 'Close', 'Volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
@@ -124,6 +122,7 @@ def fetch_daily_data(symbol, days=365):
                 df.index = df.index.tz_localize(None)
                 
     except Exception as e:
+        # Koin yang tidak ditemukan di Binance Futures akan diabaikan
         pass 
     finally:
         exchange.close()
@@ -244,7 +243,7 @@ def run_scanner_streamed_sync(coin_universe, timeframe, status_placeholder):
 
 # --- ANTARMUKA APLIKASI WEB ---
 st.title("🚀 Instant AI Signal Dashboard")
-st.caption(f"Menganalisis {len(BASE_COIN_UNIVERSE)}+ koin secara **SINKRON** (Mode Paling Stabil).")
+st.caption(f"Menganalisis {len(BASE_COIN_UNIVERSE)}+ koin **FUTURES** (Binance USD-M) secara **SINKRON**.")
 
 col1, col2, col3 = st.columns([1.5, 1.5, 7])
 selected_tf = col1.selectbox("Pilih Timeframe Sinyal:", ['1d', '4h', '1h'], help="Pilih Timeframe sinyal yang diinginkan.")
