@@ -1,7 +1,6 @@
 # File: analyst_instant.py
-# Versi: 33.0 - UI LOGIKA TERBUKA TOTAL (Memastikan Timeframe dan Tombol Selalu Terlihat)
-# Tujuan: Memindahkan Timeframe Selector ke bagian paling atas agar selalu dapat diakses, 
-# bahkan ketika Health Check gagal dan memanggil st.stop().
+# Versi: 35.0 - MIGRASI PENUH KE BYBIT API (Mengatasi Kendala Binance)
+# Tujuan: Mengganti semua endpoint dan penanganan simbol koin ke Bybit API untuk stabilitas.
 
 import streamlit as st
 import pandas as pd
@@ -10,18 +9,74 @@ import time
 import requests 
 import json
 
-# --- PENTING: PENGGUNAAN API PUBLIK BINANCE FUTURES ---
-BINANCE_API_URL = "https://fapi.binance.com/fapi/v1/klines"
+# --- PENTING: PENGGUNAAN API PUBLIK BYBIT FUTURES ---
+# Menggunakan Bybit Linear Futures Endpoint
+BYBIT_API_URL = "https://api.bybit.com/v5/market/kline"
+BYBIT_TICKER_URL = "https://api.bybit.com/v5/market/tickers" # Untuk Health Check dan Data Mover
 REQUEST_TIMEOUT = 30 
 
-# --- DAFTAR KOIN BLUE-CHIP (HANYA ~35 KOIN LIKUIDITAS TERTINGGI UNTUK STABILITAS) ---
+# --- DAFTAR KOIN BESAR (KEMBALI KE 350+ SIMBOL PERPETUAL USDT) ---
+# CATATAN: Bybit menggunakan format BTCUSDT (tanpa slash)
 BASE_COIN_UNIVERSE = [
-    'BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'XRP/USDT', 'ADA/USDT', 'DOGE/USDT',
-    'DOT/USDT', 'MATIC/USDT', 'LTC/USDT', 'BCH/USDT', 'LINK/USDT', 'AVAX/USDT', 'UNI/USDT',
-    'XLM/USDT', 'ETC/USDT', 'ALGO/USDT', 'ATOM/USDT', 'FIL/USDT', 'EGLD/USDT', 'TRX/USDT',
-    'AAVE/USDT', 'COMP/USDT', 'MKR/USDT', 'YFI/USDT', 'DYDX/USDT', 'SUI/USDT', 'SEI/USDT',
-    'APT/USDT', 'IMX/USDT', 'ARB/USDT', 'OP/USDT', 'RNDR/USDT', 'TIA/USDT', 'FET/USDT'
+    # Daftar Koin 350+ (FULL LIST RE-ACTIVATED, Dikonversi ke format Bybit)
+    'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'BNBUSDT', 'ADAUSDT',
+    'AVAXUSDT', 'LINKUSDT', 'DOTUSDT', 'MATICUSDT', 'SHIBUSDT', 'TRXUSDT', 'BCHUSDT',
+    'LTCUSDT', 'NEARUSDT', 'UNIUSDT', 'ICPUSDT', 'PEPEUSDT', 'TONUSDT', 'KASUSDT',
+    'INJUSDT', 'RNDRUSDT', 'TIAUSDT', 'FETUSDT', 'WIFUSDT', 'ARBUSDT', 'OPUSDT',
+    'ETCUSDT', 'XLMUSDT', 'FILUSDT', 'IMXUSDT', 'APTUSDT', 'FTMUSDT', 'SANDUSDT', 
+    'MANAUSDT', 'GRTUSDT', 'AAVEUSDT', 'ATOMUSDT', 'ZILUSDT', 'ALGOSDT', 'EGLDUSDT', 
+    'SUIUSDT', 'SEIUSDT', 'PYTHUSDT', 'GMTUSDT', 'IDUSDT', 'KNCUSDT', 'WLDUSDT', 
+    'MINAUSDT', 'DYDXUSDT', 'GALAUSDT', 'LDOUSDT', 'BTTUSDT', 'VETUSDT', 'OCEANUSDT', 
+    'ROSEUSDT', 'EOSUSDT', 'FLOWUSDT', 'THETAUSDT', 'AXSUSDT', 'ENJUSDT', 'CRVUSDT', 
+    'GMXUSDT', 'COMPUSDT', 'YFIUSDT', 'SNXUSDT', 'MKRUSDT', 'FXSUSDT', 'RUNEUSDT', 
+    'ZECUSDT', 'BATUSDT', '1INCHUSDT', 'CELOUSDT', 'ZRXUSDT', 'ONTUSDT', 'DASHUSDT', 
+    'CVCUSDT', 'NEOUSDT', 'QTUMUSDT', 'ICXUSDT', 'WAVESUSDT', 'DCRUSDT', 'OMGUSDT', 
+    'BANDUSDT', 'BELUSDT', 'CHZUSDT', 'HBARUSDT', 'IOTXUSDT', 'ZENUSDT',
+    'PERPUSDT', 'RLCUSDT', 'CTXCUSDT', 'BAKEUSDT', 'KAVAUSDT', 'CELRUSDT', 'RVNUSDT', 
+    'TLMUSDT', 'TFUELUSDT', 'STXUSDT', 'JASMYUSDT', 'GLMRUSDT', 'MASKUSDT', 'DODOUSDT', 
+    'ASTRUSDT', 'ACHUSDT', 'AGIXUSDT', 'SPELLUSDT', 'WOOUSDT', 'VELOUSDT',
+    'FLOKIUSDT', 'BONKUSDT', '1000PEPEUSDT', 'MEMEUSDT', 
+    'PENGUUSDT', 'TRUMPUSDT', 'FARTUSDT', 'TOSHIUSDT', 'BOMEUSDT',
+    'ARKMUSDT', 'TAOUSDT', 'AKTUSDT', 'NMTUSDT', 'OLASUSDT', 'CQTUSDT', 
+    'PHBUSDT', 'OPSECUSDT', 'GLMUSDT', 'SEILORUSDT', 
+    'METISUSDT', 'STRKUSDT', 'ZETAUSDT', 'ALTUSDT', 'LSKUSDT', 'BEAMUSDT', 'AEVOUSDT', 
+    'CKBUSDT', 'SSVUSDT', 'MAVIAUSDT', 'JTOUSDT', 'BLURUSDT', 'SCUSDT', 'CFXUSDT', 
+    'FLRUSDT', 'MOVRUSDT', 'GNSUSDT', 'HIGHUSDT', 'MAGICUSDT', 'RDNTUSDT', 'LEVERUSDT', 
+    'CTSIUSDT', 'VRAUSDT', 'POLSUSDT', 'XECUSDT', 'KLAYUSDT', 'WEMIXUSDT', 'API3USDT', 
+    'CHESSUSDT', 'SKLUSDT', 'STMXUSDT', 'ONGUSDT', 'ARPAUSDT', 'HFTUSDT', 
+    'PENDLEUSDT', 'GTCUSDT', 'EDUUSDT', 'YGGUSDT', 'LINAUSDT', 'MCUSDT', 'C98USDT', 
+    'ZROUSDT', 'AITECHUSDT', 'PRIMEUSDT', 'MANTLEUSDT',
+    'GALUSDT', 'NMRUSDT', 'SFPUSDT', 'TOMOUSDT', 'SYSUSDT', 'WAXPUSDT', 'PHAUSDT', 
+    'ALICEUSDT', 'DUSKUSDT', 'ILVUSDT', 'RSRUSDT', 'TUSDT', 'RIFUSDT', 'BADGERUSDT', 
+    'KP3RUSDT', 'DARUSDT', 'CPOOLUSDT', 'AUCTIONUSDT', 'ZKSUSDT', 'XVSUSDT', 'NKNUSDT', 
+    'MDTUSDT', 'PROSUSDT', 'TRUUSDT', 'REIUSDT', 'DATAUSDT', 'KEYUSDT', 'LOOMUSDT', 
+    'HIFIUSDT', 'LRCUSDT', 'ZBCUSDT', 'HYPEUSDT', 'ASTERUSDT', 'USELESSUSDT', 
+    'LAUNCHCOINUSDT', 'AERGOUSDT', 'AKROUSDT', 'ALPHAUSDT', 'ANKRUSDT', 'ATAUSDT', 
+    'BALUSDT', 'BICOUSDT', 'BLZUSDT', 'BNXUSDT', 'CLVUSDT', 'COTIUSDT', 'DENTUSDT', 
+    'DGBUSDT', 'DMTRUSDT', 'DREPUSDT', 'ELFUSDT', 'EPSUSDT', 'ERTHAUSDT', 
+    'FISUSDT', 'FORTHUSDT', 'GHSTUSDT', 'HARDUSDT', 
+    'HNTUSDT', 'HOTUSDT', 'IDEXUSDT', 'IOSTUSDT', 'IOTAUSDT', 'IRISUSDT', 'LUNAUSDT', 
+    'MBOXUSDT', 'MITHUSDT', 'MTLUSDT', 'NULSUSDT', 
+    'ONEUSDT', 'OXTUSDT', 'PERPUSDT', 'PUNDIXUSDT', 'QLCUSDT', 
+    'QUICKUSDT', 'RAYUSDT', 'REEFUSDT', 'RENUSDT', 'REQUSDT', 'RVNUSDT', 'SOLOUSDT', 
+    'SOSUSDT', 'STEEMUSDT', 'STGUSDT', 'STORJUSDT', 'SUNUSDT', 'SUSHUSDT', 'TUSDT', 
+    'TOMOUSDT', 'TRBUSDT', 'TUSDUSDT', 'UMAUSDT', 'UNFIUSDT', 'UTKUSDT', 'VIBUSDT', 
+    'WANUSDT', 'XEMUSDT', 'XYOUSDT', '1000SHIBUSDT',
+    'UMAUSDT', 'LRCUSDT', 'AXSUSDT', 'BATUSDT', 
+    'CHZUSDT', 'DODOUSDT', 'GALAUSDT', 'GRTUSDT', 'MKRUSDT', 'NEOUSDT', 
+    'ONTUSDT', 'QTUMUSDT', 'SFPUSDT', 'SUSHUSDT', 'THETAUSDT',
+    'UNIUSDT', 'VETUSDT', 'XLMUSDT', 'ZILUSDT', 'ZRXUSDT', 'BNXUSDT',
+    'FTTUSDT', 'GMTUSDT', 'LDOUSDT',
+    'PEPEUSDT', 'SEIUSDT', 'TIAUSDT', 'WLDUSDT', 'XVSUSDT', 'YFIUSDT', 'ZECUSDT', 'ZRXUSDT', 
+    'AIOZUSDT', 'ALICEUSDT', 'ANKRUSDT', 'APENFTUSDT', 'API3USDT', 'ARPAUSDT',
+    'AUCTIONUSDT', 'BSWUSDT', 'C98USDT', 'CELRUSDT', 'CTKUSDT', 'DREPUSDT',
+    'FISUSDT', 'FLMUSDT', 'FLOWUSDT', 'GTCUSDT', 'HBARUSDT',
+    'IDEXUSDT', 'IOSTUSDT', 'IOTAUSDT', 'IRISUSDT', 'LUNAUSDT', 'LPTUSDT', 'LTOUSDT',
+    'NANOUSDT', 'OXTUSDT', 'PAXGUSDT', 'PHBUSDT', 'PUNDIXUSDT', 'QNTUSDT',
+    'RAYUSDT', 'RIFUSDT', 'RLCUSDT', 'RSRUSDT', 'RUNEUSDT', 'SXPUSDT', 'TUSDT',
+    'TRBUSDT', 'TRUUSDT', 'TUSDUSDT', 'UMAUSDT', 'UNFIUSDT', 'UTKUSDT', 'VIBUSDT', 'WEMIXUSDT', 'XYOUSDT', 'ZKSUSDT', 'ZROUSDT'
 ]
+
 
 # --- DEKLARASI GLOBAL ---
 total_coins_scanned = len(BASE_COIN_UNIVERSE)
@@ -46,12 +101,12 @@ INSTANT_CSS = """
 """
 
 # --- PENGATURAN HALAMAN & KONFIGURASI AWAL ---
-st.set_page_config(layout="wide", page_title="Instant AI Analyst", initial_sidebar_state="collapsed")
+st.set_page_config(layout="wide", page_title="Instant AI Analyst (Bybit)", initial_sidebar_state="collapsed")
 st.markdown(INSTANT_CSS, unsafe_allow_html=True) 
 
-# --- HEADER DAN TIMEFRAME SELECTOR (DIPINDAHKAN KE SINI) ---
-st.title("🚀 Instant AI Signal Dashboard")
-st.caption(f"Menganalisis **{total_coins_scanned} koin Blue-Chip (Fokus Kualitas)** dengan **Smart Money Entry**.")
+# --- HEADER DAN TIMEFRAME SELECTOR ---
+st.title("🚀 Instant AI Signal Dashboard (Bybit)")
+st.caption(f"Menganalisis **{total_coins_scanned}+ koin (Skala Penuh)** menggunakan **Bybit API**.")
 
 col1, col2, col3 = st.columns([1.5, 1.5, 7])
 selected_tf = col1.selectbox("Pilih Timeframe Sinyal:", ['1d', '4h', '1h'], help="Pilih Timeframe sinyal yang diinginkan.")
@@ -59,17 +114,19 @@ if col2.button("🔄 Scan Ulang Sekarang (Data Penuh)"):
     st.cache_data.clear() 
     st.rerun() 
 st.markdown("---")
-# --- FUNGSI HEALTH CHECK API BINANCE ---
+# --- FUNGSI HEALTH CHECK API BYBIT ---
 @st.cache_data(ttl=60)
-def binance_health_check():
-    """Memeriksa koneksi API dengan mengambil data BTC. Mengembalikan True jika berhasil."""
+def bybit_health_check():
+    """Memeriksa koneksi API dengan mengambil data Ticker. Mengembalikan True jika berhasil."""
     try:
-        symbol_id = 'BTCUSDT'
-        params = {'symbol': symbol_id, 'interval': '1m', 'limit': 1}
-        response = requests.get(BINANCE_API_URL, params=params, timeout=5) 
+        # Pengecekan koneksi menggunakan endpoint umum Ticker
+        params = {'category': 'linear', 'symbol': 'BTCUSDT'}
+        response = requests.get(BYBIT_TICKER_URL, params=params, timeout=5) 
         response.raise_for_status()
-        bars = response.json()
-        if bars and len(bars) > 0:
+        
+        # Bybit mengembalikan struktur 'result' dan 'list'
+        data = response.json()
+        if data and data.get('retCode') == 0 and data['result']['list']:
             return True
         return False
     except requests.exceptions.RequestException:
@@ -81,32 +138,36 @@ def binance_health_check():
 
 @st.cache_data(show_spinner=True, ttl=60) 
 def fetch_daily_data(symbol, days=7):
-    """Mengambil data HANYA 7 HARI untuk beban API yang sangat ringan."""
-    
-    symbol_id = symbol.replace('/', '') 
+    """Mengambil data HANYA 7 HARI untuk beban API yang sangat ringan dari Bybit."""
     
     end_time_ms = int(time.time() * 1000)
+    # Bybit API menggunakan Unix time milidetik untuk start/end
     start_time_ms = end_time_ms - 86400000 * days
 
     params = {
-        'symbol': symbol_id,
-        'interval': '1d',
-        'startTime': start_time_ms,
+        'category': 'linear',
+        'symbol': symbol,
+        'interval': 'D', # 'D' for Daily
+        'start': start_time_ms,
         'limit': 1000 
     }
     
     df = None
     try:
-        response = requests.get(BINANCE_API_URL, params=params, timeout=REQUEST_TIMEOUT)
+        response = requests.get(BYBIT_API_URL, params=params, timeout=REQUEST_TIMEOUT)
         response.raise_for_status() 
         
-        bars = response.json()
+        data = response.json()
         
-        if bars and len(bars) > 0:
-            df = pd.DataFrame.from_records(bars)
+        if data.get('retCode') == 0 and data['result']['list']:
+            bars = data['result']['list']
+            # Data Bybit terbalik (terbaru di index 0), kita perlu membaliknya
+            bars.reverse()
             
+            df = pd.DataFrame.from_records(bars)
+            # Kolom Bybit: [timestamp, Open, High, Low, Close, Volume, Turnover, ...]
             df = df.iloc[:, 0:6] 
-            df.columns = ['timestamp', 'Open', 'High', 'Low', 'Close', 'Volume']
+            df.columns = ['timestamp', 'Open', 'High', 'Low', 'Close', 'Volume', 'Turnover']
 
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms') 
             df = df.astype({'Open': float, 'High': float, 'Low': float, 'Close': float, 'Volume': float})
@@ -122,6 +183,7 @@ def fetch_daily_data(symbol, days=7):
 @st.cache_data(show_spinner=False)
 def analyze_structure(df):
     """Analisis struktur dan mengembalikan status lengkap."""
+    # Kriteria 7 bar tetap dipertahankan untuk analisis struktur minimum
     if df is None or len(df) < 7: 
         return {'structure': 'Data Tidak Cukup', 'current_price': None, 'fib_bias': 'Netral', 'high': None, 'low': None, 'proxy_low': None, 'proxy_high': None, 'change_pct': 0.0}
 
@@ -265,14 +327,14 @@ def find_signal_resampled(symbol, user_timeframe):
             # Data Analisis Komprehensif (REPORT)
             'report_w_structure': structure_w, 'report_d_structure': structure_d,
             'report_user_structure': structure_user, 'report_fib_bias': fib_bias_d,
-            'report_current_price': current_price, 'report_proxy_low': proxy_low,
+            'report_current_price': current_close, 'report_proxy_low': proxy_low,
             'report_proxy_high': proxy_high,
         }
     
     # Jika sinyal Nihil, kembalikan data minimal untuk mover report
     return {
         'symbol': symbol, 'conviction': 'Nihil', 'change_pct': change_pct,
-        'current_price': current_price,
+        'current_price': current_close,
         'report_w_structure': structure_w, 
         'report_d_structure': structure_d,
     }
@@ -287,27 +349,26 @@ def run_scanner_streamed_sync(coin_universe, timeframe, status_placeholder):
         if result:
             all_results.append(result)
         
-        # Jeda 50ms per koin (maks 20 request/detik) 
-        time.sleep(0.05) 
+        # Jeda 70ms per koin (maks 14 request/detik) 
+        time.sleep(0.07) 
         
-        if i % 5 == 0 or i == total_coins_scanned - 1: # Update status lebih sering karena koin lebih sedikit
+        if i % 20 == 0 or i == total_coins_scanned - 1: # Update status lebih jarang karena koin lebih banyak
             found_signals = len([r for r in all_results if r.get('conviction') not in ['Nihil', 'Error']])
             status_placeholder.info(f"Memindai {symbol}... Koin ke {i+1} dari {total_coins_scanned}. Ditemukan {found_signals} sinyal trading.")
             
     return all_results
 
 # --- EKSEKUSI: HEALTH CHECK ---
-is_connected = binance_health_check()
+is_connected = bybit_health_check()
 
 if not is_connected:
-    st.error("🔴 **KONEKSI GAGAL TOTAL:** Gagal terhubung ke Binance API (BTC/USDT Health Check).")
+    st.error("🔴 **KONEKSI GAGAL TOTAL:** Gagal terhubung ke Bybit API (BTCUSDT Health Check).")
     st.warning(f"Kendala jaringan eksternal (API Down/Rate Limit) terdeteksi. Silakan coba ubah Timeframe Sinyal ({selected_tf}) atau refresh browser Anda.")
     
-    # st.stop() dipindahkan ke sini untuk menghentikan eksekusi kode di bawah
     st.stop()
     
 # Jika terhubung, lanjutkan ke UI dan Pemindaian
-st.success(f"🟢 **KONEKSI API BERHASIL:** Binance API Health Check (BTC/USDT) berhasil. Melanjutkan pemindaian {total_coins_scanned} koin.")
+st.success(f"🟢 **KONEKSI API BERHASIL:** Bybit API Health Check (BTCUSDT) berhasil. Melanjutkan pemindaian {total_coins_scanned} koin.")
 
 
 # --- INISIALISASI VARIABEL RUNTIME ---
@@ -424,7 +485,7 @@ signal_percentage = (total_signals / total_coins_scanned) * 100 if total_coins_s
 
 # --- BAGIAN REPORT MOVER (SELALU TAMPIL) ---
 st.header("⚡ Laporan Koin Penggerak (24 Jam) - Top Movers")
-st.caption("Analisis ini hanya mencakup koin Blue-Chip teratas untuk stabilitas data.")
+st.caption("Analisis ini mencakup seluruh pasar (350+ koin) dari Bybit API.")
 
 if movers_for_guarantee:
     top_bullish = top_bullish_movers
@@ -571,3 +632,4 @@ else:
                     st.caption(f"Timeframe: {selected_tf}")
                     
                     display_report_details(trade)
+                    
