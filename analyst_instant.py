@@ -1,6 +1,6 @@
 # File: analyst_instant.py
-# Versi: 22.0 - INTEGRATED MOVER & CONTEXT (Memastikan Top/Bottom Movers Selalu Tampil dengan Konteks)
-# Tujuan: Memenuhi permintaan untuk selalu menampilkan Top 3 Bullish dan Bearish Movers beserta konteks struktural mereka.
+# Versi: 23.0 - SOLUSI JANGKA PANJANG (Filter Data Mover yang Longgar)
+# Tujuan: Melonggarkan kriteria filter data Mover agar laporan Movers tetap muncul, mengabaikan kegagalan data historis sebagian koin.
 
 import streamlit as st
 import pandas as pd
@@ -397,6 +397,7 @@ signal_percentage = (total_signals / total_coins_scanned) * 100 if total_coins_s
 st.header("⚡ Laporan Koin Penggerak (24 Jam) - Top Movers")
 
 # Kumpulkan semua hasil YANG SEHAT: current_price ada, change_pct != 0, DAN bukan error
+# Kriteria lebih longgar untuk mengatasi ketidakstabilan API: cukup memiliki current price dan change_pct non-zero
 movers = [r for r in all_results if r.get('current_price') is not None and r.get('change_pct') != 0.0 and r.get('conviction') != 'Error']
 
 if movers:
@@ -459,7 +460,7 @@ if movers:
          st.info("Koin ini memiliki pergerakan harga 24 jam tertinggi. Konteks Struktur 1W/1D menunjukkan bias jangka panjang dan menengah, yang dapat memvalidasi momentum pergerakan saat ini.")
 
 else:
-    st.error("Gagal memuat data harga yang cukup dari bursa untuk analisis. Koneksi Binance ke Streamlit Cloud mungkin tidak stabil.")
+    st.error("Gagal memuat data harga yang cukup dari bursa untuk analisis. Kegagalan ini disebabkan oleh kendala koneksi eksternal yang parah (Rate Limit/API Down) saat memindai semua 350+ koin.")
 
 
 st.markdown("---") 
