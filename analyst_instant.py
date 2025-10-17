@@ -1,6 +1,6 @@
 # File: analyst_instant.py
-# Versi: 21.2 - FINAL STABILITAS (Fix NameError dan Logika Reporting)
-# Tujuan: Memperbaiki NameError: total_coins_scanned, dan memastikan semua fitur berjalan stabil.
+# Versi: 21.3 - FINAL STABILITAS JARINGAN (Menambahkan Time.Sleep Anti-Rate Limit)
+# Tujuan: Memperbaiki kegagalan koneksi massal dengan menambahkan jeda 50ms per koin untuk menghindari Rate Limit Binance.
 
 import streamlit as st
 import pandas as pd
@@ -74,7 +74,7 @@ BASE_COIN_UNIVERSE = [
     'TRB/USDT', 'TRU/USDT', 'TUSD/USDT', 'UMA/USDT', 'UNFI/USDT', 'UTK/USDT', 'VIB/USDT', 'WEMIX/USDT', 'XYO/USDT', 'ZKS/USDT', 'ZRO/USDT'
 ]
 
-# --- DEKLARASI GLOBAL (FIX NameError) ---
+# --- DEKLARASI GLOBAL ---
 total_coins_scanned = len(BASE_COIN_UNIVERSE)
 
 # --- PENGATURAN HALAMAN & KONFIGURASI AWAL ---
@@ -136,6 +136,7 @@ def fetch_daily_data(symbol, days=365):
             df.set_index('timestamp', inplace=True)
             
     except requests.exceptions.RequestException:
+        # Menangkap error koneksi (termasuk timeout dan rate limit jika response status error)
         return None
     except Exception:
         pass
@@ -298,6 +299,9 @@ def run_scanner_streamed_sync(coin_universe, timeframe, status_placeholder):
         result = find_signal_resampled(symbol, timeframe)
         if result:
             all_results.append(result)
+        
+        # --- PERBAIKAN STABILITAS RATE LIMIT ---
+        time.sleep(0.05) # Jeda 50ms per koin (maks 20 request/detik)
         
         if i % 20 == 0 or i == total_coins_scanned - 1:
             found_signals = len([r for r in all_results if r.get('conviction') not in ['Nihil', 'Error']])
