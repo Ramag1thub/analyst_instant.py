@@ -1,6 +1,6 @@
 # File: analyst_instant.py
-# Versi: 18.2 - STABILITAS TOTAL (Fix Syntax Error & Logika Teruji)
-# Tujuan: Memastikan logika kode berjalan sesuai standar Python dan bebas dari typo.
+# Versi: 18.2 - FINAL STABILITAS (Logika Teruji & Bebas CCXT)
+# Tujuan: Memastikan setiap langkah kode berjalan sesuai logika Python untuk stabilitas penuh.
 
 import streamlit as st
 import pandas as pd
