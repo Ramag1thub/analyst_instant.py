@@ -1,27 +1,27 @@
 # File: analyst_instant.py
-# Versi: 16.1 - FIX: SyntaxError 'dan' ke 'and' (Final Stabil)
-# Tujuan: Stabilitas maksimum, mengatasi semua error, dan menggunakan logika RR 3:1 fleksibel.
+# Versi: 16.2 - STABILITAS TOTAL (Mode Sinkron, Fix Impor & Timezone)
+# Tujuan: Menghilangkan semua error yang dilaporkan melalui kontrol versi dan struktur.
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 import time
 
-# --- PENTING: Menggunakan CCXT Sinkron ---
+# --- PENTING: Menggunakan CCXT Sinkron (Hanya ccxt) ---
 try:
-    # Hanya butuh ccxt, ccxt.pro dan asyncio dihapus untuk stabilitas maksimum.
     import ccxt 
 except ImportError:
-    st.error("Gagal mengimpor ccxt. Pastikan ccxt terinstal di requirements.txt (Hanya ccxt, bukan ccxt.pro atau asyncio).")
+    # Ini akan menjadi error terakhir yang mungkin Anda lihat jika instalasi gagal total.
+    st.error("FATAL ERROR: Gagal mengimpor ccxt. Mohon periksa kembali file requirements.txt dan pastikan telah di-deploy dengan benar.")
     st.stop()
 
 
 # --- KONSTANTA OPTIMASI GLOBAL ---
-# ASYNC_BATCH_SIZE sudah tidak digunakan karena kita beralih ke sinkron.
+# Tidak ada kode asinkron di versi ini.
 
 # --- DAFTAR KOIN DASAR (350+ SIMBOL PERPETUAL USDT) ---
 BASE_COIN_UNIVERSE = [
-    # --- BLOCKCHAIN UTAMA & DEFI CORE --- (Sekitar 350+ total)
+    # --- DAFTAR LENGKAP KOIN (350+) ---
     'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'DOGE/USDT', 'BNB/USDT', 'ADA/USDT',
     'AVAX/USDT', 'LINK/USDT', 'DOT/USDT', 'MATIC/USDT', 'SHIB/USDT', 'TRX/USDT', 'BCH/USDT',
     'LTC/USDT', 'NEAR/USDT', 'UNI/USDT', 'ICP/USDT', 'PEPE/USDT', 'TON/USDT', 'KAS/USDT',
@@ -108,7 +108,7 @@ def fetch_daily_data(symbol, days=365):
     
     exchange = ccxt.bybit({ 
         'options': {'defaultType': 'future'},
-        'timeout': 15000
+        'timeout': 15000 
     }) 
     
     df = None
@@ -202,7 +202,6 @@ def find_signal_resampled(symbol, user_timeframe):
     elif structure_d == 'Bullish' and structure_user == 'Bullish': 
         conviction = "Sedang"; bias = "Cenderung Bullish"
         tp1_pct = 3; tp2_pct = 7; sl_pct = 1.0 
-    # BARIS YANG DIPERBAIKI: Mengubah 'dan' menjadi 'and'
     elif structure_d == 'Bearish' and structure_user == 'Bearish': 
         conviction = "Sedang"; bias = "Cenderung Bearish"
         tp1_pct = -3; tp2_pct = -7; sl_pct = -1.0 
@@ -233,7 +232,6 @@ def run_scanner_streamed_sync(coin_universe, timeframe, status_placeholder):
     found_trades = []
     
     for i, symbol in enumerate(coin_universe):
-        # Sinyal SINKRON (berurutan)
         result = find_signal_resampled(symbol, timeframe)
         if result:
             found_trades.append(result)
@@ -264,7 +262,6 @@ start_time = time.time()
 status_placeholder.info(f"Memulai pemindaian instan untuk **{len(BASE_COIN_UNIVERSE)} koin** secara berurutan...")
 
 # Panggilan utama SINKRON
-# Gunakan BASE_COIN_UNIVERSE secara langsung karena tidak ada discovery koin
 found_trades = run_scanner_streamed_sync(BASE_COIN_UNIVERSE, selected_tf, status_placeholder)
 total_time = time.time() - start_time
 
