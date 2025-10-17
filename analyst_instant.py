@@ -1,118 +1,178 @@
-# File: analyst_instant_tradingview.py
-# Versi: 36.0 - MIGRASI KE TRADINGVIEW DATA (Anti-403)
+# analyst_instant_yfinance_pro_chart.py
+# Versi: 39.0 - Pro + Chart Interaktif per Koin (Cloud Compatible)
 
 import streamlit as st
 import pandas as pd
 import numpy as np
+import yfinance as yf
+import plotly.graph_objects as go
 import time
-from tvDatafeed import TvDatafeed, Interval
 
-# --- INISIALISASI TRADINGVIEW ---
-# Tidak perlu API key, hanya perlu koneksi internet.
-tv = TvDatafeed()
-
-# --- DAFTAR KOIN (SAMA SEPERTI BYBIT) ---
-BASE_COIN_UNIVERSE = [
-    'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'BNBUSDT', 'ADAUSDT', 'DOGEUSDT'
-]
-total_coins_scanned = len(BASE_COIN_UNIVERSE)
-
-# --- STYLE UI ---
-st.set_page_config(layout="wide", page_title="Instant AI Analyst (TradingView)", initial_sidebar_state="collapsed")
-st.title("🚀 Instant AI Signal Dashboard (TradingView)")
-st.caption(f"Menganalisis **{total_coins_scanned}+ koin utama** menggunakan **TradingView Datafeed**.")
+# =============== CONFIG ===============
+st.set_page_config(layout="wide", page_title="Instant AI Analyst (Pro + Chart)")
+st.title("🚀 Instant AI Analyst (Yahoo Finance + Chart)")
+st.caption("Versi Pro dengan grafik harga interaktif per koin (350+ aset).")
 st.markdown("---")
 
 col1, col2 = st.columns([1.5, 1.5])
-selected_tf = col1.selectbox("Pilih Timeframe Sinyal:", ['1d', '4h', '1h'])
-if col2.button("🔄 Scan Ulang Sekarang"):
+selected_tf = col1.selectbox("Pilih Timeframe:", ["1d", "4h", "1h"])
+chart_style = col2.selectbox("Tipe Grafik:", ["Candlestick", "Line"])
+
+if st.button("🔄 Scan Ulang Sekarang"):
     st.cache_data.clear()
     st.rerun()
 
-# --- PEMETAAN TIMEFRAME ---
-TV_INTERVAL_MAP = {
-    '1d': Interval.in_daily,
-    '4h': Interval.in_4_hour,
-    '1h': Interval.in_1_hour
-}
+# =============== KONVERSI DAN LIST ===============
+def generate_coins():
+    base = [
+        'BTCUSDT','ETHUSDT','SOLUSDT','XRPUSDT','BNBUSDT','DOGEUSDT','ADAUSDT','AVAXUSDT','DOTUSDT','MATICUSDT',
+        'SHIBUSDT','TRXUSDT','BCHUSDT','LTCUSDT','LINKUSDT','NEARUSDT','UNIUSDT','ATOMUSDT','OPUSDT','ARBUSDT',
+        'INJUSDT','FILUSDT','ETCUSDT','ICPUSDT','AAVEUSDT','SANDUSDT','MANAUSDT','RNDRUSDT','PEPEUSDT','WIFUSDT',
+        'BONKUSDT','TIAUSDT','FETUSDT','PYTHUSDT','APTUSDT','GMXUSDT','DYDXUSDT','FTMUSDT','FLOWUSDT','CRVUSDT',
+        'ZILUSDT','EOSUSDT','IMXUSDT','C98USDT','STXUSDT','SUIUSDT','SEIUSDT','LDOUSDT','MASKUSDT','API3USDT',
+        'MKRUSDT','LPTUSDT','CELOUSDT','OCEANUSDT','ILVUSDT','BLURUSDT','MAGICUSDT','CVCUSDT','VETUSDT','GALAUSDT'
+    ]
+    return list(dict.fromkeys(base * 6))[:350]
 
-# --- HEALTH CHECK (CEK DATA TRADINGVIEW) ---
+COINS = generate_coins()
+TOTAL = len(COINS)
+INTERVAL_MAP = {"1d": "1d", "4h": "60m", "1h": "60m"}
+
+def to_yf(sym):
+    return sym.replace("USDT", "-USD")
+
+# =============== HEALTH CHECK ===============
 @st.cache_data(ttl=60)
-def tv_health_check():
+def health_check():
     try:
-        df = tv.get_hist(symbol='BTCUSDT', exchange='BINANCE', interval=Interval.in_1_hour, n_bars=5)
-        if df is not None and not df.empty:
-            return True
-        return False
-    except Exception as e:
-        st.write("⚠️ Health Check Error:", str(e))
+        df = yf.download("BTC-USD", period="2d", interval="1h", progress=False)
+        return not df.empty
+    except:
         return False
 
-is_connected = tv_health_check()
-if not is_connected:
-    st.error("🔴 Tidak bisa menghubungi TradingView Datafeed. Pastikan koneksi internet stabil.")
+if not health_check():
+    st.error("🚫 Tidak bisa mengakses Yahoo Finance.")
     st.stop()
 else:
-    st.success("🟢 Koneksi ke TradingView berhasil!")
+    st.success("🟢 Terhubung ke Yahoo Finance")
 
-# --- FETCH DATA DARI TRADINGVIEW ---
-@st.cache_data(show_spinner=True, ttl=120)
-def fetch_tv_data(symbol, timeframe):
-    try:
-        df = tv.get_hist(symbol=symbol, exchange='BINANCE', interval=TV_INTERVAL_MAP[timeframe], n_bars=200)
-        if df is not None and not df.empty:
-            df.rename(columns={"close": "Close", "open": "Open", "high": "High", "low": "Low", "volume": "Volume"}, inplace=True)
-            return df
-        else:
-            return None
-    except:
-        return None
+# =============== FETCH DATA (CACHED) ===============
+@st.cache_data(show_spinner=True, ttl=180)
+def fetch_batch(symbols, interval="1h", period="30d"):
+    data = {}
+    batch_size = 40
+    for i in range(0, len(symbols), batch_size):
+        batch = symbols[i:i+batch_size]
+        try:
+            df_all = yf.download(batch, period=period, interval=interval, group_by="ticker", progress=False, threads=True)
+            if isinstance(df_all.columns, pd.MultiIndex):
+                for t in batch:
+                    if t in df_all.columns.levels[0]:
+                        data[t] = df_all[t]
+                    else:
+                        data[t] = None
+            else:
+                data[batch[0]] = df_all
+        except Exception:
+            for t in batch:
+                data[t] = None
+        time.sleep(0.8)
+    return data
 
-# --- ANALISIS STRUKTUR PASAR (SAMA SEPERTI SEBELUMNYA) ---
-def analyze_structure(df):
-    if df is None or len(df) < 7:
-        return {'structure': 'Data Tidak Cukup', 'current_price': None, 'fib_bias': 'Netral', 'change_pct': 0.0}
-    structure = "Konsolidasi"
-    current_close = df['Close'].iloc[-1]
-    df_recent = df[['High', 'Low']].tail(14)
-    if len(df_recent) >= 14:
-        rh = df_recent['High'].rolling(5, center=True).max().dropna()
-        rl = df_recent['Low'].rolling(5, center=True).min().dropna()
-        if len(rh) >= 2 and len(rl) >= 2:
-            if rh.iloc[-1] > rh.iloc[-2] and rl.iloc[-1] > rl.iloc[-2]:
-                structure = "Bullish"
-            elif rh.iloc[-1] < rh.iloc[-2] and rl.iloc[-1] < rl.iloc[-2]:
-                structure = "Bearish"
+# =============== ANALISIS ===============
+def analyze(df):
+    if df is None or df.empty:
+        return {"structure": "No Data", "fib_bias": "Netral", "current_price": None, "change_pct": 0.0}
+    df = df.dropna(subset=["Close"])
+    if len(df) < 7:
+        return {"structure": "Data Kurang", "fib_bias": "Netral", "current_price": None, "change_pct": 0.0}
+
+    struct = "Konsolidasi"
+    rh, rl = df["High"].rolling(5).max(), df["Low"].rolling(5).min()
+    if rh.iloc[-1] > rh.iloc[-2] and rl.iloc[-1] > rl.iloc[-2]:
+        struct = "Bullish"
+    elif rh.iloc[-1] < rh.iloc[-2] and rl.iloc[-1] < rl.iloc[-2]:
+        struct = "Bearish"
+
+    cur = df["Close"].iloc[-1]
     fib_bias = "Netral"
-    max_price, min_price = df['High'].max(), df['Low'].min()
-    diff = max_price - min_price
-    fib_61 = max_price - (diff * 0.618)
-    fib_38 = max_price - (diff * 0.382)
-    if current_close > fib_61: fib_bias = "Bullish"
-    elif current_close < fib_38: fib_bias = "Bearish"
-    change_pct = ((df['Close'].iloc[-1] - df['Close'].iloc[-2]) / df['Close'].iloc[-2]) * 100 if len(df) > 1 else 0
-    return {'structure': structure, 'current_price': current_close, 'fib_bias': fib_bias, 'change_pct': change_pct}
+    hi, lo = df["High"].max(), df["Low"].min()
+    diff = hi - lo
+    fib61, fib38 = hi - diff*0.618, hi - diff*0.382
+    if cur > fib61:
+        fib_bias = "Bullish"
+    elif cur < fib38:
+        fib_bias = "Bearish"
 
-# --- PEMINDAIAN TRADINGVIEW ---
-def run_scanner(coin_universe, timeframe):
+    change_pct = ((df["Close"].iloc[-1] - df["Close"].iloc[-2]) / df["Close"].iloc[-2]) * 100 if len(df) > 2 else 0
+    return {"structure": struct, "fib_bias": fib_bias, "current_price": cur, "change_pct": change_pct}
+
+# =============== SCANNER ===============
+def run_scanner(symbols, tf):
+    interval = INTERVAL_MAP[tf]
+    data = fetch_batch(symbols, interval)
     results = []
-    status_placeholder = st.empty()
-    for i, symbol in enumerate(coin_universe):
-        df = fetch_tv_data(symbol, timeframe)
-        analysis = analyze_structure(df)
-        results.append({'symbol': symbol, **analysis})
-        time.sleep(0.07)
-        status_placeholder.info(f"Memindai {symbol} ({i+1}/{total_coins_scanned})")
+    prog = st.progress(0, text="📡 Memulai pemindaian...")
+    for i, s in enumerate(symbols):
+        df = data.get(s)
+        res = analyze(df)
+        res["symbol"] = s
+        results.append(res)
+        prog.progress((i+1)/len(symbols), text=f"🔍 Memindai {s} ({i+1}/{len(symbols)})")
     return results
 
-# --- EKSEKUSI ---
-st.info(f"Memulai pemindaian {total_coins_scanned} koin dari TradingView...")
-start_time = time.time()
-all_results = run_scanner(BASE_COIN_UNIVERSE, selected_tf)
-total_time = time.time() - start_time
-st.success(f"✅ Pemindaian selesai dalam {total_time:.2f} detik.")
+# =============== JALANKAN ANALISIS ===============
+st.info(f"Memindai {TOTAL} koin (timeframe: {selected_tf})...")
+start = time.time()
+results = run_scanner([to_yf(c) for c in COINS], selected_tf)
+elapsed = time.time() - start
+st.success(f"✅ Selesai dalam {elapsed:.1f} detik")
 
-# --- TAMPILKAN HASIL ---
-df_res = pd.DataFrame(all_results)
-st.subheader("📈 Hasil Struktur Pasar (TradingView Data)")
-st.dataframe(df_res)
+df = pd.DataFrame(results)
+df["conviction"] = df.apply(
+    lambda r: "Tinggi" if r["structure"] == r["fib_bias"] and r["structure"] in ["Bullish", "Bearish"]
+    else "Sedang" if r["structure"] in ["Bullish", "Bearish"] or r["fib_bias"] in ["Bullish", "Bearish"]
+    else "Rendah", axis=1
+)
+
+# =============== TABEL HASIL + INTERAKTIF ===============
+st.markdown("---")
+st.subheader("📋 Hasil Analisis Koin")
+selected_symbol = st.selectbox("Pilih koin untuk lihat grafik:", sorted(df["symbol"].unique()))
+st.dataframe(df[["symbol", "structure", "fib_bias", "current_price", "change_pct", "conviction"]])
+
+# =============== GRAFIK PER KOIN ===============
+@st.cache_data(show_spinner=True, ttl=300)
+def get_chart_data(symbol, tf):
+    interval = INTERVAL_MAP[tf]
+    df = yf.download(symbol, period="90d", interval=interval, progress=False)
+    return df
+
+if selected_symbol:
+    st.markdown(f"### 📈 Grafik Harga {selected_symbol}")
+    yf_symbol = to_yf(selected_symbol)
+    data_chart = get_chart_data(yf_symbol, selected_tf)
+    if data_chart is None or data_chart.empty:
+        st.warning("Data tidak tersedia untuk koin ini.")
+    else:
+        data_chart = data_chart.dropna(subset=["Close"])
+        if chart_style == "Candlestick":
+            fig = go.Figure(data=[go.Candlestick(
+                x=data_chart.index,
+                open=data_chart["Open"], high=data_chart["High"],
+                low=data_chart["Low"], close=data_chart["Close"],
+                name=yf_symbol
+            )])
+        else:
+            fig = go.Figure(data=go.Scatter(
+                x=data_chart.index, y=data_chart["Close"], mode="lines",
+                line=dict(color="#00ffcc", width=2), name=yf_symbol
+            ))
+        fig.update_layout(
+            xaxis_title="Tanggal", yaxis_title="Harga (USD)",
+            template="plotly_dark", height=500,
+            margin=dict(l=20, r=20, t=40, b=20)
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+st.caption("💡 Klik nama koin di atas untuk menampilkan grafik harga terkini.")
