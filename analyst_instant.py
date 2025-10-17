@@ -1,6 +1,6 @@
 # File: analyst_instant.py
-# Versi: 20.0 - SMART MONEY ENTRY (Entry di Level Order Block/Support)
-# Tujuan: Menggunakan Support/Resistance Historis sebagai Entry Price untuk RR yang Optimal.
+# Versi: 20.1 - FINAL STABILITAS KONEKSI (Timeout Jaringan Diperpanjang)
+# Tujuan: Memperpanjang timeout jaringan dari 15s ke 30s untuk koneksi yang stabil.
 
 import streamlit as st
 import pandas as pd
@@ -11,6 +11,8 @@ import json
 
 # --- PENTING: PENGGUNAAN API PUBLIK BINANCE FUTURES ---
 BINANCE_API_URL = "https://fapi.binance.com/fapi/v1/klines"
+# TIMEOUT DIPERPANJANG UNTUK STABILITAS KONEKSI CLOUD
+REQUEST_TIMEOUT = 30 
 
 # --- DAFTAR KOIN DASAR (350+ SIMBOL PERPETUAL USDT) ---
 BASE_COIN_UNIVERSE = [
@@ -56,7 +58,7 @@ BASE_COIN_UNIVERSE = [
     'ONE/USDT', 'OXT/USDT', 'PERL/USDT', 'PUNDIX/USDT', 'QLC/USDT', 
     'QUICK/USDT', 'RAY/USDT', 'REEF/USDT', 'REN/USDT', 'REQ/USDT', 'RVN/USDT', 'SOLO/USDT', 
     'SOS/USDT', 'STEEM/USDT', 'STG/USDT', 'STORJ/USDT', 'SUN/USDT', 'SUSHI/USDT', 'T/USDT', 
-    'TOMO/USDT', 'TRB/USDT', 'TUSD/USDT', 'UMA/USDT', 'UNFI/USDT', 'UTK/USDT', 'VIB/USDT', 
+    'TOMO/USDT', 'TRB/USDT', 'TUSD/USDT', 'UTK/USDT', 'VIB/USDT', 
     'WAN/USDT', 'XEM/USDT', 'XYO/USDT', '1000SHIB/USDT',
     'UMA/USDT', 'LRC/USDT', 'AXS/USDT', 'BAT/USDT', 
     'CHZ/USDT', 'DODO/USDT', 'GALA/USDT', 'GRT/USDT', 'MKR/USDT', 'NEO/USDT', 
@@ -115,7 +117,8 @@ def fetch_daily_data(symbol, days=365):
     
     df = None
     try:
-        response = requests.get(BINANCE_API_URL, params=params, timeout=15)
+        # TIMEOUT DIPERPANJANG DI SINI
+        response = requests.get(BINANCE_API_URL, params=params, timeout=REQUEST_TIMEOUT)
         response.raise_for_status() 
         
         bars = response.json()
@@ -130,7 +133,11 @@ def fetch_daily_data(symbol, days=365):
             df = df.astype({'Open': float, 'High': float, 'Low': float, 'Close': float, 'Volume': float})
             df.set_index('timestamp', inplace=True)
             
+    except requests.exceptions.RequestException as e:
+        # Menangkap semua error koneksi dan timeout yang mungkin menyebabkan 0.04s scan
+        return None
     except Exception:
+        # Menangkap error parsing data koin yang tidak valid
         pass
         
     return df
@@ -139,7 +146,7 @@ def fetch_daily_data(symbol, days=365):
 def analyze_structure(df):
     """Analisis struktur dan mengembalikan status lengkap."""
     if df is None or len(df) < 20: 
-        return {'structure': 'Data Tidak Cukup', 'current_price': None, 'fib_bias': 'Netral', 'high': None, 'low': None}
+        return {'structure': 'Data Tidak Cukup', 'current_price': None, 'fib_bias': 'Netral', 'high': None, 'low': None, 'proxy_low': None, 'proxy_high': None}
 
     structure = "Konsolidasi"
     current_close = df['Close'].iloc[-1]
@@ -246,16 +253,12 @@ def find_signal_resampled(symbol, user_timeframe):
     if conviction in ['Tinggi', 'Sedang', 'Rendah']:
         # Hitung ulang SL dan TP berdasarkan Entry Price BARU (Entry di S/R)
         
-        # Jarak SL dari ENTRY PRICE harus tetap dalam % SL yang ditentukan, tetapi menggunakan Entry Price baru
-        # Misalnya, jika Entry 60k, SL 58.5k (2.5% dari 60k).
         sl_multiplier = 1 + (sl_pct / 100) if sl_pct >= 0 else 1 - abs(sl_pct / 100)
         sl_target = entry_price * sl_multiplier
         
-        # Jarak TP dari ENTRY PRICE harus tetap dalam % TP yang ditentukan
         tp1_target = entry_price * (1 + (tp1_pct / 100))
         tp2_target = entry_price * (1 + (tp2_pct / 100))
         
-        # Recalculate RR Ratio based on the new, aggressive entry
         risk_amount = abs(entry_price - sl_target)
         reward_amount = abs(tp1_target - entry_price)
         rr_ratio = reward_amount / risk_amount if risk_amount > 0 else 0
@@ -272,11 +275,11 @@ def find_signal_resampled(symbol, user_timeframe):
             'report_d_structure': structure_d,
             'report_user_structure': structure_user,
             'report_fib_bias': fib_bias_d,
-            'report_current_price': current_price, # Harga saat ini untuk perbandingan
+            'report_current_price': current_price,
             'report_low': analysis_d['low'],
             'report_high': analysis_d['high'],
-            'report_proxy_low': proxy_low, # Level Support/OB yang digunakan
-            'report_proxy_high': proxy_high, # Level Resistance/OB yang digunakan
+            'report_proxy_low': proxy_low,
+            'report_proxy_high': proxy_high,
         }
     return None
 
@@ -286,7 +289,12 @@ def run_scanner_streamed_sync(coin_universe, timeframe, status_placeholder):
     found_trades = []
     
     for i, symbol in enumerate(coin_universe):
+        # Time logging untuk debugging timeout
+        # start_coin_time = time.time() 
         result = find_signal_resampled(symbol, timeframe)
+        # end_coin_time = time.time()
+        # print(f"Scanned {symbol} in {end_coin_time - start_coin_time:.2f}s") 
+        
         if result:
             found_trades.append(result)
         
@@ -326,7 +334,7 @@ total_signals = len(found_trades)
 signal_percentage = (total_signals / total_coins_scanned) * 100 if total_coins_scanned > 0 else 0
 
 if not found_trades:
-    st.success(f"✅ Pemindaian selesai dalam **{total_time:.2f} detik**. Tidak ditemukan sinyal kuat saat ini. (0.00% pasar aktif)")
+    st.success(f"✅ Pemindaian selesai dalam **{total_time:.2f} detik**. Tidak ditemukan sinyal yang bisa di-tradingkan.")
 else:
     st.success(f"""
         ✅ Pemindaian selesai dalam **{total_time:.2f} detik**. 
@@ -382,7 +390,7 @@ else:
             
             st.markdown(f"""
             <div class='report-detail'>
-                <b>HARGA SAAT INI:</b> {format_price(trade['report_current_price'])}<br>
+                <b>HARGA TERAKHIR:</b> {format_price(trade['report_current_price'])}<br>
                 <b>TARGET OB/WALL ({ob_label}):</b> <span style='color:{get_trend_color(trade['bias'])};'>{format_price(ob_level)}</span><br>
                 ---
                 <b>STRUKTUR PASAR:</b><br>
@@ -447,7 +455,6 @@ else:
                     st.markdown(f"**Sinyal:** <strong style='color:{color};'>{trade['bias']}</strong>", unsafe_allow_html=True)
                     st.caption(f"Timeframe: {trade['timeframe']}")
                     
-                    # Entry Rendah menggunakan entry yang sedikit kurang agresif
                     st.markdown(f"**Entri Target:** <span class='entry'>{format_price(trade['entry'])}</span>", unsafe_allow_html=True)
                     st.markdown(f"SL ({abs(trade['sl_pct'])}%): {format_price(trade['sl_target'])}", unsafe_allow_html=True)
                     st.markdown(f"TP 1 ({abs(trade['t1_pct'])}%): {format_price(trade['tp1_target'])}", unsafe_allow_html=True)
