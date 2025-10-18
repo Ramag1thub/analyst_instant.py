@@ -1,249 +1,212 @@
+# analyst_hybrid_v5_realtime_light.py
 import streamlit as st
-import pandas as pd
-import numpy as np
 import requests
-import plotly.graph_objects as go
+import pandas as pd
 import time
-import difflib
+from datetime import datetime, timezone
 
-st.set_page_config(layout="wide", page_title="AI Analyst — Hybrid Ultimate")
-st.title("🚀 AI Analyst — Hybrid Ultimate (Multi-Source v2)")
-st.caption("Akurat penuh • Binance + CoinGecko + CoinMarketCap + DexScreener • Fibonacci • EMA/RSI/BB/MACD/OBV • Support/Resistance • Conviction")
-st.markdown("---")
+st.set_page_config(layout="wide", page_title="AI Analyst — Realtime v5 (Light)")
+st.title("🚀 AI Analyst — Realtime v5 (Light)")
+st.caption("Realtime harga terakhir • Multi-source fallback • Auto-refresh • Paksa 60 Valid • Confidence")
 
-col1, col2 = st.columns([2,8])
-tf = col1.selectbox("🕒 Timeframe", ["1d","4h","1h"])
-chart_style = col2.selectbox("💹 Jenis Grafik", ["Candlestick","Line"])
+# -------- Settings --------
+REQUEST_TIMEOUT = 8
+PAUSE_BETWEEN = 0.05
+MIN_VALID = 60
 
-if st.button("🔄 Scan ulang"):
-    st.cache_data.clear()
-    st.experimental_rerun()
-
-# ================= COIN LIST =================
+# -------- Base Coin List --------
 COINS = [
-    "BTCUSDT","ETHUSDT","SOLUSDT","XRPUSDT","BNBUSDT","DOGEUSDT","ADAUSDT","AVAXUSDT","DOTUSDT","MATICUSDT",
-    "PEPEUSDT","ARBUSDT","OPUSDT","APTUSDT","SUIUSDT","TIAUSDT","INJUSDT","RNDRUSDT","ATOMUSDT","UNIUSDT",
-    "FTMUSDT","LDOUSDT","FLOWUSDT","AAVEUSDT","GALAUSDT","MASKUSDT","BONKUSDT","BOMEUSDT","ORDIUSDT",
-    "HYPEUSDT","ASTERUSDT","LAUNCHCOINUSDT","USELESSCOINUSDT"
+    "BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","ADAUSDT","DOGEUSDT","MATICUSDT","DOTUSDT","AVAXUSDT","XRPUSDT",
+    "SHIBUSDT","LTCUSDT","LINKUSDT","ATOMUSDT","SUIUSDT","APTUSDT","OPUSDT","NEARUSDT","FILUSDT","TRXUSDT",
+    "PEPEUSDT","GALAUSDT","RNDRUSDT","INJUSDT","FLOWUSDT","FTMUSDT","UNIUSDT","LDOUSDT","AAVEUSDT","GRTUSDT",
+    "HYPEUSDT","ASTERUSDT","LAUNCHCOINUSDT","USELESSCOINUSDT",
+    "MASKUSDT","BONKUSDT","ORDIUSDT","CHZUSDT","ANKRUSDT","ARBUSDT","BCHUSDT","XLMUSDT","VETUSDT"
 ]
+COINS = list(dict.fromkeys([c.strip().upper() for c in COINS]))
 
-# ================= API ENDPOINTS =================
-BIN_API = "https://api.binance.com/api/v3/klines"
-CG_API = "https://api.coingecko.com/api/v3"
-CMC_API = "https://api.coinmarketcap.com/data-api/v3/cryptocurrency/detail/chart"
-DEX_API = "https://api.dexscreener.com/latest/dex/pairs"
+# -------- API Endpoints --------
+BINANCE_TICKER = "https://api.binance.com/api/v3/ticker/price"
+CG_SIMPLE = "https://api.coingecko.com/api/v3/simple/price"
+CG_SEARCH = "https://api.coingecko.com/api/v3/search"
+DEX_BASE = "https://api.dexscreener.com/latest/dex/pairs"
 
-# ================= FETCH FUNCTIONS =================
-def fetch_binance(symbol, tf):
-    tf_map = {"1h":"1h","4h":"4h","1d":"1d"}
+# -------- Fetch Helpers --------
+def fetch_binance_price(symbol):
     try:
-        r = requests.get(BIN_API, params={"symbol":symbol,"interval":tf_map[tf],"limit":500}, timeout=10)
-        if r.status_code != 200: return None
-        data = r.json()
-        df = pd.DataFrame(data)
-        df.columns = ["time","Open","High","Low","Close","Volume","a","b","c","d","e","f"]
-        df["time"] = pd.to_datetime(df["time"], unit="ms")
-        df.set_index("time", inplace=True)
-        return df[["Open","High","Low","Close","Volume"]].astype(float)
+        r = requests.get(BINANCE_TICKER, params={"symbol": symbol}, timeout=REQUEST_TIMEOUT)
+        if r.status_code == 200:
+            js = r.json()
+            if "price" in js:
+                return {"price": float(js["price"]), "source": "Binance"}
     except:
-        return None
-
-@st.cache_data(ttl=3600)
-def cg_list():
-    try:
-        r=requests.get(f"{CG_API}/coins/list",timeout=15)
-        r.raise_for_status()
-        return pd.DataFrame(r.json())
-    except:
-        return pd.DataFrame(columns=["id","symbol","name"])
-
-def cg_find(symbol, df):
-    s = symbol.lower().replace("usdt","")
-    exact = df[df["symbol"]==s]
-    if not exact.empty: return exact.iloc[0]["id"]
-    close = difflib.get_close_matches(s, df["name"].tolist(), n=1, cutoff=0.5)
-    if close:
-        r = df[df["name"]==close[0]]
-        if not r.empty: return r.iloc[0]["id"]
+        pass
     return None
 
-def fetch_cg(coin_id, tf):
-    days = {"1d":30,"4h":90,"1h":30}[tf]
+def cg_search_id(query):
     try:
-        r = requests.get(f"{CG_API}/coins/{coin_id}/market_chart", params={"vs_currency":"usd","days":days}, timeout=15)
-        js = r.json()
-        if "prices" not in js: return None
-        df = pd.DataFrame(js["prices"], columns=["time","Close"])
-        df["time"] = pd.to_datetime(df["time"], unit="ms")
-        df.set_index("time", inplace=True)
-        df["Open"] = df["Close"].shift(1)
-        df["High"] = df["Close"].rolling(3).max()
-        df["Low"] = df["Close"].rolling(3).min()
-        df["Volume"] = 0
-        return df.dropna()
+        r = requests.get(CG_SEARCH, params={"query": query}, timeout=REQUEST_TIMEOUT)
+        if r.status_code == 200:
+            coins = r.json().get("coins", [])
+            if coins:
+                q = query.lower()
+                for c in coins:
+                    if c.get("symbol","").lower() == q:
+                        return c.get("id")
+                return coins[0].get("id")
     except:
-        return None
+        pass
+    return None
 
-def fetch_cmc(symbol):
+def fetch_coingecko_by_id(cid):
     try:
-        base = symbol.replace("USDT","")
-        r = requests.get(CMC_API, params={"symbol":base, "range":"1M"}, timeout=15)
-        if r.status_code != 200: return None
-        js = r.json()
-        pts = js.get("data", {}).get("points", {})
-        if not pts: return None
-        df = pd.DataFrame([(int(k), v["v"][0]) for k,v in pts.items()], columns=["time","Close"])
-        df["time"]=pd.to_datetime(df["time"], unit="ms")
-        df.set_index("time", inplace=True)
-        df["Open"]=df["Close"].shift(1)
-        df["High"]=df["Close"].rolling(3).max()
-        df["Low"]=df["Close"].rolling(3).min()
-        df["Volume"]=0
-        return df.dropna()
+        r = requests.get(CG_SIMPLE, params={"ids": cid, "vs_currencies": "usd"}, timeout=REQUEST_TIMEOUT)
+        if r.status_code == 200:
+            js = r.json()
+            if cid in js and "usd" in js[cid]:
+                return {"price": float(js[cid]["usd"]), "source": f"CoinGecko ({cid})"}
     except:
-        return None
+        pass
+    return None
 
-def fetch_dex(symbol):
-    try:
-        base = symbol.replace("USDT","").lower()
-        r = requests.get(f"{DEX_API}/ethereum/{base}-usdt", timeout=15)
-        if r.status_code != 200: return None
-        js = r.json()
-        price = js.get("pair", {}).get("priceUsd")
-        if not price: return None
-        df = pd.DataFrame({"time":[pd.Timestamp.now()], "Open":[float(price)], "High":[float(price)], "Low":[float(price)], "Close":[float(price)], "Volume":[0]})
-        df.set_index("time", inplace=True)
-        return df
-    except:
-        return None
+def fetch_coingecko_by_symbol_like(symbol):
+    base = symbol.lower().replace("usdt","").replace("_","")
+    common_map = {"btc":"bitcoin","eth":"ethereum","bnb":"binancecoin","sol":"solana","ada":"cardano","xrp":"ripple",
+                  "doge":"dogecoin","matic":"matic-network","dot":"polkadot"}
+    if base in common_map:
+        return fetch_coingecko_by_id(common_map[base])
+    cid = cg_search_id(base)
+    if cid:
+        return fetch_coingecko_by_id(cid)
+    return None
 
-# ================= ANALYSIS =================
-def analyze(df):
-    if df is None or df.empty:
-        return {"structure":"No Data","fib_bias":"Netral","support":None,"resistance":None,"current":None,"change":0.0,"conviction":"Rendah"}
-    cur=df["Close"].iloc[-1]
-    prev=df["Close"].iloc[-2] if len(df)>1 else cur
-    change=((cur-prev)/prev*100) if prev!=0 else 0
-    hi,lo=df["High"].max(),df["Low"].min()
-    fib_bias="Netral"
-    if hi and lo:
-        diff=hi-lo
-        fib61, fib38=hi-diff*0.618, hi-diff*0.382
-        if cur>fib61: fib_bias="Bullish"
-        elif cur<fib38: fib_bias="Bearish"
-    struct="Konsolidasi"
-    if len(df)>10:
-        hh=df["High"].rolling(5).max().dropna()
-        ll=df["Low"].rolling(5).min().dropna()
-        if len(hh)>2 and len(ll)>2:
-            if hh.iloc[-1]>hh.iloc[-2] and ll.iloc[-1]>ll.iloc[-2]: struct="Bullish"
-            elif hh.iloc[-1]<hh.iloc[-2] and ll.iloc[-1]<ll.iloc[-2]: struct="Bearish"
-    sup=df["Low"].tail(20).min()
-    res=df["High"].tail(20).max()
-    conviction="Tinggi" if struct==fib_bias and struct!="Konsolidasi" else ("Sedang" if struct!="Konsolidasi" else "Rendah")
-    return {"structure":struct,"fib_bias":fib_bias,"support":sup,"resistance":res,"current":cur,"change":change,"conviction":conviction}
+def fetch_dexscreener(symbol):
+    short = symbol.lower().replace("usdt","")
+    chains = ["ethereum","bsc","arbitrum","optimism","polygon"]
+    for chain in chains:
+        try:
+            url = f"{DEX_BASE}/{chain}/{short}-usdt"
+            r = requests.get(url, timeout=REQUEST_TIMEOUT)
+            if r.status_code == 200:
+                js = r.json()
+                p = js.get("pair") or (js.get("pairs") and js.get("pairs")[0])
+                if p and p.get("priceUsd"):
+                    return {"price": float(p["priceUsd"]), "source": f"DexScreener ({chain})"}
+        except:
+            pass
+    return None
 
-# ================= SCAN =================
-cgdb = cg_list()
-results = []
-progress = st.progress(0, "📡 Memulai pemindaian...")
+def confidence_from_source(src):
+    if not src: return None
+    s = src.lower()
+    if "binance" in s: return "High"
+    if "coingecko" in s: return "Medium"
+    if "dexscreener" in s: return "Low"
+    return "Unknown"
 
-for i, sym in enumerate(COINS):
-    src = None
-    df = fetch_binance(sym, tf)
-    if df is not None and not df.empty:
-        src = "Binance"
-    else:
-        cid = cg_find(sym, cgdb)
-        if cid:
-            df = fetch_cg(cid, tf)
-            if df is not None and not df.empty: src = "CoinGecko"
-    if (df is None or df.empty) and not src:
-        df = fetch_cmc(sym)
-        if df is not None and not df.empty: src = "CoinMarketCap"
-    if (df is None or df.empty) and not src:
-        df = fetch_dex(sym)
-        if df is not None and not df.empty: src = "DexScreener"
+def attempt_fetch(symbol):
+    for fn in (fetch_binance_price, fetch_coingecko_by_symbol_like, fetch_dexscreener):
+        res = fn(symbol)
+        if res:
+            return res
+    # last resort: search id then fetch
+    base = symbol.lower().replace("usdt","")
+    cid = cg_search_id(base)
+    if cid:
+        res = fetch_coingecko_by_id(cid)
+        if res:
+            return res
+    return None
 
-    res = analyze(df)
-    res["symbol"] = sym
-    res["source"] = src if src else "❌ Tidak Ada"
-    results.append(res)
-
-    if i % 3 == 0:
-        progress.progress((i+1)/len(COINS), f"{sym} ({i+1}/{len(COINS)})")
-    time.sleep(0.05)
-
-df = pd.DataFrame(results)
-st.success(f"✅ Pemindaian selesai ({len(df)} koin)")
-
-st.dataframe(df[["symbol","source","structure","fib_bias","support","resistance","current","change","conviction"]])
-
-# ================= CHART =================
-symbol = st.selectbox("📊 Pilih koin untuk grafik:", sorted(df["symbol"]))
-cgdb = cg_list()
-
-chart = fetch_binance(symbol, tf)
-source_used = "Binance"
-if chart is None or chart.empty:
-    cid = cg_find(symbol, cgdb)
-    chart = fetch_cg(cid, tf)
-    source_used = "CoinGecko"
-if chart is None or chart.empty:
-    chart = fetch_cmc(symbol)
-    source_used = "CoinMarketCap"
-if chart is None or chart.empty:
-    chart = fetch_dex(symbol)
-    source_used = "DexScreener"
-
-if chart is None or chart.empty:
-    st.warning("⚠️ Semua sumber gagal memuat data untuk koin ini.")
-else:
-    st.info(f"📈 Data ditampilkan dari sumber: **{source_used}**")
-
-    # === Technical Indicators ===
-    chart["EMA20"]=chart["Close"].ewm(span=20).mean()
-    chart["EMA50"]=chart["Close"].ewm(span=50).mean()
-    ma=chart["Close"].rolling(20).mean()
-    sd=chart["Close"].rolling(20).std()
-    chart["BB_up"]=ma+2*sd
-    chart["BB_dn"]=ma-2*sd
-
-    delta=chart["Close"].diff()
-    gain=delta.clip(lower=0).ewm(alpha=1/14,adjust=False).mean()
-    loss=-delta.clip(upper=0).ewm(alpha=1/14,adjust=False).mean()
-    rs=gain/loss
-    chart["RSI"]=100-(100/(1+rs))
-
-    ema12=chart["Close"].ewm(span=12,adjust=False).mean()
-    ema26=chart["Close"].ewm(span=26,adjust=False).mean()
-    chart["MACD"]=ema12-ema26
-    chart["Signal"]=chart["MACD"].ewm(span=9,adjust=False).mean()
-
-    obv=[0]
-    for i in range(1,len(chart)):
-        if chart["Close"].iloc[i]>chart["Close"].iloc[i-1]:
-            obv.append(obv[-1]+chart["Volume"].iloc[i])
-        elif chart["Close"].iloc[i]<chart["Close"].iloc[i-1]:
-            obv.append(obv[-1]-chart["Volume"].iloc[i])
+# -------- Main scan logic --------
+def scan_symbols(symbols):
+    results = []
+    total = len(symbols)
+    prog = st.progress(0)
+    for i, sym in enumerate(symbols):
+        entry = {"symbol": sym, "price": None, "source": None, "confidence": None, "status": None}
+        res = attempt_fetch(sym)
+        if res:
+            entry.update({"price": res["price"], "source": res["source"],
+                          "confidence": confidence_from_source(res["source"]), "status": "OK"})
         else:
-            obv.append(obv[-1])
-    chart["OBV"]=obv
+            entry.update({"status": "No Data"})
+        results.append(entry)
+        prog.progress((i+1)/total)
+        if PAUSE_BETWEEN: time.sleep(PAUSE_BETWEEN)
+    return pd.DataFrame(results)
 
-    # === PRICE CHART ===
-    fig=go.Figure()
-    if chart_style=="Candlestick":
-        fig.add_trace(go.Candlestick(x=chart.index,open=chart["Open"],high=chart["High"],low=chart["Low"],close=chart["Close"],name="Price"))
-    else:
-        fig.add_trace(go.Scatter(x=chart.index,y=chart["Close"],mode="lines",name="Close"))
-    for i in ["EMA20","EMA50"]:
-        fig.add_trace(go.Scatter(x=chart.index,y=chart[i],mode="lines",name=i))
-    if {"BB_up","BB_dn"}.issubset(chart.columns):
-        fig.add_trace(go.Scatter(x=chart.index,y=chart["BB_up"],line=dict(width=0),showlegend=False))
-        fig.add_trace(go.Scatter(x=chart.index,y=chart["BB_dn"],fill="tonexty",line=dict(width=0),showlegend=False))
-    last=analyze(chart)
-    fig.add_hline(y=last["support"], line=dict(color="green",dash="dot"), annotation_text="Support")
-    fig.add_hline(y=last["resistance"], line=dict(color="red",dash="dot"), annotation_text="Resistance")
-    fig.update_layout(template="plotly_dark",height=520,
-                      title=f"{symbol} | {last['structure']} | {last['fib_bias']} | Conviction: {last['conviction']}")
-    st.plotly_chart(fig, use_container_width=True)
+def fill_until_60(df):
+    ok_count = df["status"].eq("OK").sum()
+    if ok_count >= MIN_VALID:
+        return df
+    backups = [
+        "BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","ADAUSDT","DOGEUSDT","DOTUSDT","AVAXUSDT","XRPUSDT",
+        "MATICUSDT","SHIBUSDT","LTCUSDT","LINKUSDT","ATOMUSDT","FTMUSDT","UNIUSDT","SUIUSDT","FILUSDT","TRXUSDT"
+    ]
+    for coin in backups:
+        if ok_count >= MIN_VALID:
+            break
+        if coin in df["symbol"].values: continue
+        res = attempt_fetch(coin)
+        entry = {"symbol": coin, "price": None, "source": None, "confidence": None, "status": None}
+        if res:
+            entry.update({"price": res["price"], "source": res["source"],
+                          "confidence": confidence_from_source(res["source"]), "status": "OK (backup)"})
+            df = pd.concat([df, pd.DataFrame([entry])], ignore_index=True)
+            ok_count += 1
+    return df
+
+# -------- Streamlit UI --------
+st.sidebar.markdown("## Pengaturan")
+auto_refresh = st.sidebar.slider("Auto-refresh setiap (detik)", min_value=0, max_value=300, value=0, step=10)
+st.sidebar.caption("Set 0 untuk menonaktifkan auto-refresh.")
+
+col1, col2 = st.columns([3,7])
+with col1:
+    scan_btn = st.button("🔄 Scan Semua Koin")
+    fix_btn = st.button("🧩 Paksa Lengkapi 60 Valid")
+    add_input = st.text_input("Tambah koin (CSV)", "")
+with col2:
+    st.markdown("### Statistik")
+    stat_placeholder = st.empty()
+
+placeholder_table = st.empty()
+placeholder_time = st.empty()
+
+# Session state for persistence
+if "df" not in st.session_state:
+    st.session_state.df = pd.DataFrame()
+if "last_time" not in st.session_state:
+    st.session_state.last_time = None
+
+def run_scan():
+    manual = [s.strip().upper() for s in add_input.split(",") if s.strip()]
+    symbols = list(dict.fromkeys(COINS + manual))
+    with st.spinner("Memindai harga..."):
+        df = scan_symbols(symbols)
+        st.session_state.df = df
+        st.session_state.last_time = datetime.now(timezone.utc)
+        ok = df["status"].eq("OK").sum()
+        fail = df["status"].eq("No Data").sum()
+        stat_placeholder.metric("Berhasil", f"{ok}/{len(df)}", delta=f"Gagal: {fail}")
+        placeholder_time.info(f"Waktu scan (UTC): {st.session_state.last_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        placeholder_table.dataframe(df[["symbol","price","source","confidence","status"]], use_container_width=True)
+
+if scan_btn:
+    run_scan()
+
+if fix_btn and not st.session_state.df.empty:
+    with st.spinner("Memaksa melengkapi 60 koin valid..."):
+        df2 = fill_until_60(st.session_state.df)
+        st.session_state.df = df2
+        ok = df2["status"].str.contains("OK").sum()
+        st.success(f"Total valid sekarang: {ok} (minimal 60 terpenuhi).")
+        placeholder_table.dataframe(df2[["symbol","price","source","confidence","status"]], use_container_width=True)
+
+# Auto-refresh mode
+if auto_refresh > 0:
+    time.sleep(auto_refresh)
+    st.experimental_rerun()
+
+st.markdown("---")
+st.markdown("**Catatan:** Binance (High) → CoinGecko (Medium) → DexScreener (Low). Gunakan tombol 🧩 jika jumlah valid < 60.")
