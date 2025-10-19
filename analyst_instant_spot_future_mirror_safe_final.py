@@ -1,9 +1,12 @@
-# analyst_hybrid_v7_full.py
+# analyst_hybrid_v8_full_restore.py
 """
-AI Analyst — Hybrid Ultimate v7 (Full, exchange-first fallback)
-- Prioritas sumber: Binance -> Bybit -> Bitget -> Gate -> KuCoin -> CoinGecko -> CoinMarketCap -> yfinance -> DexScreener
-- Minimal 60 koin valid, confidence, anti-error, indikator teknikal, tabel analisa di atas
-- Dependencies: streamlit, pandas, numpy, requests, plotly, yfinance
+AI Analyst — Hybrid v8 (Full Restore)
+- Tabel analisa utama (paling atas) termasuk:
+    Structure | Fib Bias | Chance Price (%) | Entry Price (support) | Support | Resistance | Change% | Conviction | Source | Confidence
+- Chart & indicators: EMA20/50, BB, RSI, MACD, OBV
+- Exchange-first fallback: Binance -> Bybit -> Bitget -> Gate -> KuCoin -> CoinGecko -> CoinMarketCap -> yfinance -> DexScreener
+- Minimal 60 valid (auto fill backups), anti-error (try/except everywhere)
+- Entry Price = Support (sesuai permintaan)
 """
 import streamlit as st
 import pandas as pd
@@ -14,26 +17,29 @@ from datetime import datetime, timezone
 import plotly.graph_objects as go
 import yfinance as yf
 
-st.set_page_config(layout="wide", page_title="AI Analyst — Hybrid Ultimate v7")
-st.title("🚀 AI Analyst — Hybrid Ultimate v7")
-st.caption("Exchange-first fallback: Binance, Bybit, Bitget, Gate, KuCoin, CoinGecko, CMC, yfinance, DexScreener")
+st.set_page_config(layout="wide", page_title="AI Analyst — Hybrid v8 (Full Restore)")
+st.title("🚀 AI Analyst — Hybrid v8 (Full Restore)")
+st.caption("Full analysis restored • Exchange-first fallback • Entry = Support • Chance Price (%) • Anti-error")
 
 # ---------------- Settings ----------------
 REQUEST_TIMEOUT = 10
 PAUSE_BETWEEN = 0.04
 MIN_VALID = 60
 TF_OPTIONS = ["1d", "4h", "1h"]
+# Map timeframe strings used in some APIs
+TF_KLINE_MAP = {"1d":"1d","4h":"4h","1h":"1h"}
 
-# ---------------- Base coin list (include customs) ----------------
+# ---------------- Base coin list (includes requested customs) ----------------
 COINS = [
     "BTCUSDT","ETHUSDT","SOLUSDT","XRPUSDT","BNBUSDT","DOGEUSDT","ADAUSDT","AVAXUSDT","DOTUSDT","MATICUSDT",
     "PEPEUSDT","ARBUSDT","OPUSDT","APTUSDT","SUIUSDT","INJUSDT","RNDRUSDT","ATOMUSDT","UNIUSDT","FTMUSDT",
-    "LDOUSDT","FLOWUSDT","AAVEUSDT","GALAUSDT","MASKUSDT","BONKUSDT","ORDIUSDT",
+    "LDOUSDT","FLOWUSDT","AAVEUSDT","GALAUSDT","MASKUSDT","BONKUSUSDT","BONKUSDT","BOMEUSDT","ORDIUSDT",
     "HYPEUSDT","ASTERUSDT","LAUNCHCOINUSDT","USELESSCOINUSDT",
     "SHIBUSDT","LTCUSDT","LINKUSDT","NEARUSDT","FILUSDT","TRXUSDT","GRTUSDT","CHZUSDT","ANKRUSDT","ARBUSDT",
     "BCHUSDT","XLMUSDT","VETUSDT","XTZUSDT","ZECUSDT","ENSUSDT","KLAYUSDT"
 ]
-COINS = list(dict.fromkeys([c.strip().upper() for c in COINS]))
+# sanitize and dedupe
+COINS = list(dict.fromkeys([c.strip().upper() for c in COINS if c]))
 
 # ---------------- Endpoints ----------------
 BIN_API_KLINES = "https://api.binance.com/api/v3/klines"
@@ -42,12 +48,12 @@ CG_API = "https://api.coingecko.com/api/v3"
 CMC_API = "https://api.coinmarketcap.com/data-api/v3/cryptocurrency/detail/chart"
 DEX_BASE = "https://api.dexscreener.com/latest/dex/pairs"
 
-# Exchange-specific public endpoints (no API key):
-BYBIT_V5_TICKERS = "https://api.bybit.com/v5/market/tickers"            # params: category, symbol
-BYBIT_V5_KLINE = "https://api.bybit.com/v5/market/kline"               # params: category,symbol,interval
-BITGET_TICKER = "https://api.bitget.com/api/v2/spot/market/tickers"    # params: symbol
-GATE_TICKERS = "https://api.gateio.ws/api/v4/spot/tickers"             # returns list
-KUCOIN_L1 = "https://api.kucoin.com/api/v1/market/orderbook/level1"    # param: symbol (BTC-USDT)
+# Exchange-specific endpoints (public)
+BYBIT_V5_TICKERS = "https://api.bybit.com/v5/market/tickers"
+BYBIT_V5_KLINE = "https://api.bybit.com/v5/market/kline"
+BITGET_TICKER = "https://api.bitget.com/api/spot/v1/market/ticker"
+GATE_TICKERS = "https://api.gateio.ws/api/v4/spot/tickers"
+KUCOIN_L1 = "https://api.kucoin.com/api/v1/market/orderbook/level1"
 
 # ---------------- Utilities ----------------
 def safe_get(url, params=None, timeout=REQUEST_TIMEOUT):
@@ -60,33 +66,29 @@ def safe_get(url, params=None, timeout=REQUEST_TIMEOUT):
     return None
 
 def try_symbol_variants(symbol):
-    """Return list of common symbol formats for exchanges to try."""
+    """Common symbol variants to try per exchange."""
     base = symbol.replace("USDT","")
     variants = [
         symbol,                           # BTCUSDT
         base + "-USDT",                   # BTC-USDT
         base + "/USDT",                   # BTC/USDT
         base + "_USDT",                   # BTC_USDT
-        base + "USDT",                    # BTCUSDT (again)
+        base + "USDT",                    # BTCUSDT
         base.lower() + "usdt",            # btcusdt
         base.lower() + "-usdt"
     ]
-    # remove duplicates
-    seen = set()
-    out = []
+    seen = set(); out=[]
     for v in variants:
         if v not in seen:
-            out.append(v)
-            seen.add(v)
+            out.append(v); seen.add(v)
     return out
 
-# ---------------- Exchange fetchers (price and OHLC) ----------------
+# ---------------- Exchange fetchers ----------------
 
-# Binance OHLC (preferred)
+# Binance OHLC and Price
 def fetch_binance_ohlc(symbol, tf, limit=500):
-    tf_map = {"1h":"1h","4h":"4h","1d":"1d"}
     try:
-        js = safe_get(BIN_API_KLINES, params={"symbol": symbol, "interval": tf_map[tf], "limit": limit})
+        js = safe_get(BIN_API_KLINES, params={"symbol": symbol, "interval": TF_KLINE_MAP[tf], "limit": limit})
         if not js:
             return None
         df = pd.DataFrame(js)
@@ -94,46 +96,45 @@ def fetch_binance_ohlc(symbol, tf, limit=500):
         df["time"] = pd.to_datetime(df["time"], unit="ms")
         df.set_index("time", inplace=True)
         return df[["Open","High","Low","Close","Volume"]].astype(float)
-    except:
+    except Exception:
         return None
 
 def fetch_binance_price(symbol):
     try:
-        js = safe_get(BIN_API_PRICE, params={"symbol": symbol})
+        js = safe_get(BIN_API_PRICE, params={"symbol":symbol})
         if js and "price" in js:
             return float(js["price"])
     except:
         return None
     return None
 
-# Bybit: tickers and kline v5
+# Bybit price & OHLC
 def fetch_bybit_price(symbol):
-    # try variants and with category=spot
     for s in try_symbol_variants(symbol):
-        # try v5 tickers with category=spot
         try:
-            js = safe_get(BYBIT_V5_TICKERS, params={"category":"spot","symbol":s})
+            js = safe_get(BYBIT_V5_TICKERS, params={"category":"spot", "symbol": s})
             if js and "result" in js:
-                # result can be list or dict
-                res = js.get("result")
+                res = js["result"]
+                # result might be dict or list
                 if isinstance(res, list) and len(res)>0:
-                    p = res[0].get("lastPrice") or res[0].get("last_price") or res[0].get("last")
-                    if p:
-                        return float(p)
+                    item = res[0]
                 elif isinstance(res, dict):
-                    p = res.get("lastPrice") or res.get("last_price") or res.get("last")
+                    # some responses put symbol as key
+                    item = res
+                else:
+                    item = None
+                if item:
+                    p = item.get("lastPrice") or item.get("last_price") or item.get("last")
                     if p:
                         return float(p)
         except:
-            pass
+            continue
     return None
 
 def fetch_bybit_ohlc(symbol, tf):
-    # attempt v5 kline; try symbol variants and category=spot
-    tf_map = {"1h":"1h","4h":"4h","1d":"1d"}
     for s in try_symbol_variants(symbol):
         try:
-            js = safe_get(BYBIT_V5_KLINE, params={"category":"spot","symbol":s,"interval":tf_map[tf],"limit":500})
+            js = safe_get(BYBIT_V5_KLINE, params={"category":"spot","symbol":s,"interval":TF_KLINE_MAP[tf],"limit":500})
             if js and "result" in js and js["result"] and "list" in js["result"]:
                 lst = js["result"]["list"]
                 df = pd.DataFrame(lst, columns=["time","Open","High","Low","Close","Volume"])
@@ -141,83 +142,74 @@ def fetch_bybit_ohlc(symbol, tf):
                 df.set_index("time", inplace=True)
                 return df.astype(float)
         except:
-            pass
+            continue
     return None
 
-# Bitget price (public)
+# Bitget price
 def fetch_bitget_price(symbol):
     for s in try_symbol_variants(symbol):
         try:
-            js = safe_get(BITGET_TICKER, params={"symbol":s})
-            # response examples vary; try to find price
-            if js:
-                # sometimes returns {"data": [...]} or list
-                if isinstance(js, dict) and "data" in js:
-                    data = js["data"]
-                    if isinstance(data, list) and len(data)>0 and isinstance(data[0], dict):
-                        p = data[0].get("last") or data[0].get("last_price") or data[0].get("price")
-                        if p: return float(p)
-                elif isinstance(js, list) and len(js)>0:
-                    p = js[0].get("last")
-                    if p: return float(p)
+            js = safe_get(BITGET_TICKER, params={"symbol": s})
+            if not js:
+                continue
+            # response forms vary
+            if isinstance(js, dict) and "data" in js and isinstance(js["data"], list) and len(js["data"])>0:
+                it = js["data"][0]
+                p = it.get("last") or it.get("price") or it.get("lastPrice")
+                if p: return float(p)
+            elif isinstance(js, dict) and "last" in js:
+                return float(js["last"])
         except:
-            pass
+            continue
     return None
 
-# Gate price: fetch list and filter
+# Gate price
 def fetch_gate_price(symbol):
     try:
         js = safe_get(GATE_TICKERS)
         if not js:
             return None
         base = symbol.replace("USDT","").upper()
-        # Gate uses 'currency_pair' like 'BTC_USDT' or 'ETH_USDT'
-        for item in js:
-            pair = item.get("currency_pair") or item.get("symbol") or item.get("pair")
-            if not pair:
-                continue
-            normalized = pair.replace("-","_").replace("/","_").replace("-USDT","_USDT").upper()
-            # some items are like 'BTC_USDT'
+        for it in js:
+            pair = it.get("currency_pair") or it.get("pair") or it.get("symbol")
+            if not pair: continue
+            normalized = pair.replace("-","_").replace("/","_").upper()
             if normalized.startswith(base + "_"):
-                # last price keys may vary
-                p = item.get("last") or item.get("last_price") or item.get("price")
-                try:
-                    if p:
+                p = it.get("last") or it.get("last_price") or it.get("price")
+                if p:
+                    try:
                         return float(p)
-                except:
-                    continue
+                    except:
+                        continue
     except:
         pass
     return None
 
-# KuCoin price: level1 endpoint for symbol like 'BTC-USDT'
+# KuCoin price
 def fetch_kucoin_price(symbol):
     for s in try_symbol_variants(symbol):
-        # KuCoin expects dash 'BTC-USDT'
         candidate = s if "-" in s else s.replace("/", "-").replace("_", "-")
         try:
             js = safe_get(KUCOIN_L1, params={"symbol":candidate})
-            if js and ("data" in js and "price" in js["data"]):
+            if js and "data" in js and "price" in js["data"]:
                 return float(js["data"]["price"])
-            # older endpoints return {"price":...}
             if js and "price" in js:
                 return float(js["price"])
         except:
-            pass
-    # try allTickers as fallback
+            continue
+    # fallback allTickers
     try:
         js = safe_get("https://api.kucoin.com/api/v1/market/allTickers")
         if js and "data" in js and "ticker" in js["data"]:
             base = symbol.replace("USDT","").upper()
             for t in js["data"]["ticker"]:
-                symbol_t = t.get("symbol","")
-                if symbol_t.startswith(base + "-"):
+                if str(t.get("symbol","")).startswith(base + "-"):
                     return float(t.get("last"))
     except:
         pass
     return None
 
-# DexScreener fallback for price
+# DexScreener price
 def fetch_dex_price(symbol):
     short = symbol.lower().replace("usdt","")
     chains = ["ethereum","bsc","arbitrum","optimism","polygon"]
@@ -236,11 +228,11 @@ def fetch_dex_price(symbol):
             continue
     return None
 
-# CoinGecko simple price
+# CoinGecko price
 def fetch_coingecko_price(symbol):
     try:
         base = symbol.lower().replace("usdt","")
-        common_map = {"btc":"bitcoin","eth":"ethereum","bnb":"binancecoin","sol":"solana","ada":"cardano","xrp":"ripple","doge":"dogecoin","matic":"matic-network","dot":"polkadot"}
+        common_map = {"btc":"bitcoin","eth":"ethereum","bnb":"binancecoin","sol":"solana","ada":"cardano","xrp":"ripple","doge":"dogecoin","matic":"matic-network","dot":"polkadot","avax":"avalanche-2"}
         cid = common_map.get(base)
         if not cid:
             s = safe_get(f"{CG_API}/search", params={"query":base})
@@ -254,21 +246,22 @@ def fetch_coingecko_price(symbol):
         pass
     return None
 
-# CoinMarketCap quick price attempt
+# CoinMarketCap price
 def fetch_cmc_price(symbol):
     try:
         base = symbol.replace("USDT","")
         js = safe_get(CMC_API, params={"symbol":base,"range":"1M"})
         if js:
             pts = js.get("data",{}).get("points",{})
-            # take first
-            for k,v in pts.items():
-                return float(v["v"][0])
+            if pts:
+                # take last point
+                for k,v in pts.items():
+                    return float(v["v"][0])
     except:
         pass
     return None
 
-# yfinance quick price
+# yfinance price
 def fetch_yfinance_price(symbol):
     try:
         base = symbol.upper().replace("USDT","-USD")
@@ -280,66 +273,30 @@ def fetch_yfinance_price(symbol):
         pass
     return None
 
-# Combined quick price fetcher (tries exchanges in priority)
+# Combined quick price (exchange-first)
 def get_price_quick_exchange_first(symbol):
-    # try Binance
+    # order: Binance, Bybit, Bitget, Gate, KuCoin, CoinGecko, CMC, yfinance, Dex
     p = fetch_binance_price(symbol)
     if p: return p, "Binance"
-    # Bybit
     p = fetch_bybit_price(symbol)
     if p: return p, "Bybit"
-    # Bitget
     p = fetch_bitget_price(symbol)
     if p: return p, "Bitget"
-    # Gate
     p = fetch_gate_price(symbol)
     if p: return p, "Gate"
-    # KuCoin
     p = fetch_kucoin_price(symbol)
     if p: return p, "KuCoin"
-    # CoinGecko
     p = fetch_coingecko_price(symbol)
     if p: return p, "CoinGecko"
-    # CoinMarketCap
     p = fetch_cmc_price(symbol)
     if p: return p, "CoinMarketCap"
-    # yfinance
     p = fetch_yfinance_price(symbol)
     if p: return p, "yfinance"
-    # DEX
     p = fetch_dex_price(symbol)
     if p: return p, "DexScreener"
     return None, None
 
-# Combined OHLC fetcher (prefer exchange klines then yfinance)
-def get_ohlc_for_symbol_exchange_first(symbol, tf):
-    # try Binance OHLC
-    df = fetch_binance_ohlc(symbol, tf)
-    if df is not None and not df.empty:
-        return df, "Binance"
-    # Bybit kline
-    df = fetch_bybit_ohlc(symbol, tf)
-    if df is not None and not df.empty:
-        return df, "Bybit"
-    # yfinance OHLC
-    df = fetch_yfinance_ohlc(symbol=tf, symbol_full=symbol) if False else None  # placeholder, will use function below
-    # We'll use yfinance fetch below (defined further) ; for now try yfinance fallback
-    try:
-        # fall back to yfinance mapping
-        df = fetch_yfinance_ohlc_generic(symbol, tf)
-        if df is not None and not df.empty:
-            return df, "yfinance"
-    except:
-        pass
-    # As last resort, try to create 1-bar DF from quick price
-    p, src = get_price_quick_exchange_first(symbol)
-    if p is not None:
-        tiny = pd.DataFrame({"Open":[p],"High":[p],"Low":[p],"Close":[p],"Volume":[0]})
-        tiny.index = pd.to_datetime([datetime.now()])
-        return tiny, src or "Quick"
-    return None, None
-
-# yfinance OHLC generic helper
+# OHLC combined (exchange-first)
 def fetch_yfinance_ohlc_generic(symbol, tf):
     try:
         base = symbol.upper().replace("USDT","-USD")
@@ -349,8 +306,7 @@ def fetch_yfinance_ohlc_generic(symbol, tf):
         interval = interval_map.get(tf, "1h")
         tk = yf.Ticker(base)
         df = tk.history(period=period, interval=interval, actions=False)
-        if df is None or df.empty:
-            return None
+        if df is None or df.empty: return None
         df = df.rename(columns={"Open":"Open","High":"High","Low":"Low","Close":"Close","Volume":"Volume"})
         df.index = pd.to_datetime(df.index)
         df = df[["Open","High","Low","Close","Volume"]].astype(float)
@@ -358,19 +314,49 @@ def fetch_yfinance_ohlc_generic(symbol, tf):
     except:
         return None
 
-# ---------------- Analysis helpers (same as before) ----------------
+def get_ohlc_for_symbol_exchange_first(symbol, tf):
+    # Binance
+    df = fetch_binance_ohlc(symbol, tf)
+    if df is not None and not df.empty:
+        return df, "Binance"
+    # Bybit
+    df = fetch_bybit_ohlc(symbol, tf)
+    if df is not None and not df.empty:
+        return df, "Bybit"
+    # yfinance
+    df = fetch_yfinance_ohlc_generic(symbol, tf)
+    if df is not None and not df.empty:
+        return df, "yfinance"
+    # as last resort create 1-bar from quick price
+    price, src = get_price_quick_exchange_first(symbol)
+    if price is not None:
+        tiny = pd.DataFrame({"Open":[price],"High":[price],"Low":[price],"Close":[price],"Volume":[0]})
+        tiny.index = pd.to_datetime([datetime.now()])
+        return tiny, src or "Quick"
+    return None, None
+
+# ---------------- Technical analysis functions ----------------
 def analyze_df(df):
     if df is None or df.empty:
-        return {"structure":"No Data","fib_bias":"Netral","support":None,"resistance":None,"current":None,"change":0.0,"conviction":"Rendah"}
+        return {"structure":"No Data","fib_bias":"Netral","support":None,"resistance":None,"current":None,"change":0.0,"conviction":"Rendah","fib_levels":{}}
     try:
         cur = df["Close"].iloc[-1]
         prev = df["Close"].iloc[-2] if len(df)>1 else cur
         change = ((cur-prev)/prev*100) if prev != 0 else 0.0
         hi, lo = df["High"].max(), df["Low"].min()
         fib_bias = "Netral"
+        fib_levels = {}
         if pd.notna(hi) and pd.notna(lo) and hi!=lo:
             diff = hi - lo
-            fib61, fib38 = hi - diff*0.618, hi - diff*0.382
+            fib_levels = {
+                "fib_0": hi,
+                "fib_0.236": hi - diff*0.236,
+                "fib_0.382": hi - diff*0.382,
+                "fib_0.5": hi - diff*0.5,
+                "fib_0.618": hi - diff*0.618,
+                "fib_1": lo
+            }
+            fib61, fib38 = fib_levels["fib_0.618"], fib_levels["fib_0.382"]
             if cur > fib61:
                 fib_bias = "Bullish"
             elif cur < fib38:
@@ -387,13 +373,12 @@ def analyze_df(df):
         sup = df["Low"].tail(20).min() if "Low" in df.columns else None
         res = df["High"].tail(20).max() if "High" in df.columns else None
         conviction = "Tinggi" if struct==fib_bias and struct!="Konsolidasi" else ("Sedang" if struct!="Konsolidasi" else "Rendah")
-        return {"structure":struct,"fib_bias":fib_bias,"support":sup,"resistance":res,"current":cur,"change":change,"conviction":conviction}
-    except:
-        return {"structure":"No Data","fib_bias":"Netral","support":None,"resistance":None,"current":None,"change":0.0,"conviction":"Rendah"}
+        return {"structure":struct,"fib_bias":fib_bias,"support":sup,"resistance":res,"current":cur,"change":change,"conviction":conviction,"fib_levels":fib_levels}
+    except Exception:
+        return {"structure":"No Data","fib_bias":"Netral","support":None,"resistance":None,"current":None,"change":0.0,"conviction":"Rendah","fib_levels":{}}
 
 def add_indicators(df):
-    if df is None or df.empty:
-        return df
+    if df is None or df.empty: return df
     df = df.copy()
     df["EMA20"] = df["Close"].ewm(span=20).mean()
     df["EMA50"] = df["Close"].ewm(span=50).mean()
@@ -414,7 +399,7 @@ def add_indicators(df):
     df["Signal"] = df["MACD"].ewm(span=9,adjust=False).mean()
     # OBV
     obv = [0]
-    for i in range(1,len(df)):
+    for i in range(1, len(df)):
         if df["Close"].iloc[i] > df["Close"].iloc[i-1]:
             obv.append(obv[-1] + (df["Volume"].iloc[i] if "Volume" in df.columns else 0))
         elif df["Close"].iloc[i] < df["Close"].iloc[i-1]:
@@ -425,9 +410,8 @@ def add_indicators(df):
     return df
 
 def confidence_from_source(src):
-    if not src:
-        return None
-    s = src.lower()
+    if not src: return None
+    s = str(src).lower()
     if any(x in s for x in ["binance","bybit","kucoin","bitget","gate","yfinance"]):
         return "High"
     if any(x in s for x in ["coingecko","coinmarketcap"]):
@@ -438,7 +422,7 @@ def confidence_from_source(src):
         return "Synthetic"
     return "Unknown"
 
-# ---------------- Quick scan and ensure >=60 valid ----------------
+# ---------------- Scanning & ensure >=60 valid ----------------
 def quick_scan_symbols(symbols):
     results = []
     total = len(symbols)
@@ -461,11 +445,9 @@ def fill_to_min_valid(df):
     ok_count = df["status"].eq("OK").sum()
     if ok_count >= MIN_VALID:
         return df
-    # Use exchange-priority backup list (popular)
     backups = [
         "BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","ADAUSDT","DOGEUSDT","MATICUSDT","DOTUSDT","AVAXUSDT",
         "XRPUSDT","SHIBUSDT","LTCUSDT","LINKUSDT","ATOMUSDT","SUIUSDT","APTUSDT","OPUSDT","NEARUSDT","FILUSDT",
-        "TRXUSDT","PEPEUSDT","GALAUSDT","RNDRUSDT","INJUSDT","FLOWUSDT","FTMUSDT","UNIUSDT","AAVEUSDT","LDOUSDT"
     ]
     tried = set(df["symbol"].tolist())
     for b in backups:
@@ -483,6 +465,38 @@ def fill_to_min_valid(df):
         time.sleep(PAUSE_BETWEEN)
     df = df.drop_duplicates(subset=["symbol"], keep="first").reset_index(drop=True)
     return df
+
+# ---------------- Helper: chance price & entry ----------------
+def compute_chance_and_entry(analysis):
+    """
+    analysis: dict returned from analyze_df, containing support, resistance, current, fib_levels
+    Returns: chance_pct (0-100), chance_label, entry_price (we'll use support)
+    """
+    cur = analysis.get("current")
+    sup = analysis.get("support")
+    res = analysis.get("resistance")
+    fibs = analysis.get("fib_levels", {})
+    if cur is None or sup is None or res is None or res == sup:
+        return None, "Unknown", sup
+    # chance: how close current is to support relative to range (lower -> better entry)
+    try:
+        pct = (cur - sup) / (res - sup) * 100  # 0% @ support, 100% @ resistance
+        pct = max(0.0, min(100.0, pct))
+    except:
+        pct = None
+    # label logic: lower pct -> higher chance (near support)
+    if pct is None:
+        label = "Unknown"
+    elif pct < 20:
+        label = "High (near support)"
+    elif pct < 40:
+        label = "Good"
+    elif pct < 60:
+        label = "Moderate"
+    else:
+        label = "Low (near resistance)"
+    entry_price = sup  # as requested
+    return round(pct,2) if pct is not None else None, label, entry_price
 
 # ---------------- Streamlit UI ----------------
 col_left, col_right = st.columns([2,8])
@@ -507,10 +521,10 @@ if "last_scan" not in st.session_state:
 if "chart_symbol" not in st.session_state:
     st.session_state.chart_symbol = None
 
-# Run quick scan when button pressed
+# Run quick scan
 if scan_btn:
     symbols = COINS.copy()
-    with st.spinner("Memindai harga (quick snapshot) — mencoba banyak exchange..."):
+    with st.spinner("Memindai harga (quick snapshot) — exchange-first..."):
         qdf = quick_scan_symbols(symbols)
         qdf = fill_to_min_valid(qdf)
         st.session_state.scan_df = qdf
@@ -532,7 +546,7 @@ if force_60_btn:
             st.success(f"Total valid sekarang: {ok} (minimal {MIN_VALID} terpenuhi jika tersedia).")
             table_placeholder.dataframe(df2[["symbol","price","source","confidence","status"]], use_container_width=True)
 
-# If scan_df exists, build full analysis table
+# If scan exists, build full analysis
 if not st.session_state.scan_df.empty and (scan_btn or force_60_btn):
     analysis_results = []
     df_map = {}
@@ -540,10 +554,9 @@ if not st.session_state.scan_df.empty and (scan_btn or force_60_btn):
     prog = st.progress(0)
     for i, row in st.session_state.scan_df.iterrows():
         sym = row["symbol"]
-        # OHLC via exchanges prioritized
         ohlc, src = get_ohlc_for_symbol_exchange_first(sym, tf)
         if ohlc is None:
-            # build 1-bar from quick price
+            # build single-bar from quick price fallback
             price = row.get("price")
             if price is not None:
                 tiny = pd.DataFrame({"Open":[price],"High":[price],"Low":[price],"Close":[price],"Volume":[0]})
@@ -551,49 +564,52 @@ if not st.session_state.scan_df.empty and (scan_btn or force_60_btn):
                 ohlc = tiny
                 src = row.get("source") or "QuickPrice"
         analysis = analyze_df(ohlc)
-        analysis["symbol"] = sym
-        analysis["data_source_for_ohlc"] = src
-        analysis["reported_price"] = row.get("price")
-        analysis["reported_source"] = row.get("source")
-        analysis["confidence"] = row.get("confidence")
-        analysis_results.append((analysis, ohlc))
-        df_map[sym] = ohlc
-        prog.progress((i+1)/total)
-        time.sleep(PAUSE_BETWEEN)
-    summary_rows = []
-    for analysis, ohlc in analysis_results:
-        summary_rows.append({
-            "symbol": analysis.get("symbol"),
+        chance_pct, chance_label, entry_price = compute_chance_and_entry(analysis)
+        # collect info
+        analysis_record = {
+            "symbol": sym,
             "structure": analysis.get("structure"),
             "fib_bias": analysis.get("fib_bias"),
+            "chance_pct": chance_pct,
+            "chance_label": chance_label,
+            "entry_price": entry_price,
             "support": analysis.get("support"),
             "resistance": analysis.get("resistance"),
             "current": analysis.get("current"),
             "change_%": round(analysis.get("change",0),4),
             "conviction": analysis.get("conviction"),
-            "data_src": analysis.get("data_source_for_ohlc"),
-            "reported_price": analysis.get("reported_price"),
-            "reported_src": analysis.get("reported_source"),
-            "confidence": analysis.get("confidence")
-        })
+            "data_src": src,
+            "reported_price": row.get("price"),
+            "reported_src": row.get("source"),
+            "confidence": row.get("confidence")
+        }
+        analysis_results.append((analysis_record, ohlc))
+        df_map[sym] = ohlc
+        prog.progress((i+1)/total)
+        time.sleep(PAUSE_BETWEEN)
+    # Build summary DataFrame
+    summary_rows = [r for r,o in analysis_results]
     analysis_df = pd.DataFrame(summary_rows)
     st.session_state.analysis_df = analysis_df
     st.markdown("#### Tabel Analisa — ringkasan")
-    st.dataframe(analysis_df.sort_values(by=["conviction","structure"], ascending=[False,False]).reset_index(drop=True), use_container_width=True)
+    # reorder columns for readability
+    cols_order = ["symbol","structure","fib_bias","chance_pct","chance_label","entry_price","support","resistance","current","change_%","conviction","data_src","reported_price","reported_src","confidence"]
+    display_df = analysis_df.reindex(columns=cols_order)
+    st.dataframe(display_df.sort_values(by=["conviction","structure"], ascending=[False,False]).reset_index(drop=True), use_container_width=True)
 
-    # chart selection
+    # default chart symbol
     ok_syms = analysis_df[analysis_df["current"].notna()]["symbol"].tolist()
     if len(ok_syms) > 0:
         st.session_state.chart_symbol = st.selectbox("📊 Pilih koin untuk grafik:", ok_syms, index=0)
     else:
         st.session_state.chart_symbol = st.selectbox("📊 Pilih koin untuk grafik:", COINS, index=0)
 
-    # show counts
+    # show source counts
     src_counts = analysis_df["data_src"].fillna("None").value_counts().rename_axis("source").reset_index(name="count")
     st.markdown("#### Sumber data (OHLC) — jumlah")
     st.table(src_counts)
 
-    # charting
+    # Charting
     symbol = st.session_state.chart_symbol
     chart_df = df_map.get(symbol)
     if chart_df is None or chart_df.empty:
@@ -647,11 +663,14 @@ if auto_refresh > 0:
     time.sleep(auto_refresh)
     st.experimental_rerun()
 
-# Footer
+# Footer notes
 st.markdown("---")
 st.markdown(
     """
-    **Catatan:** Kode mencoba banyak endpoint publik (Bybit V5, Bitget public, Gate v4, KuCoin v1) dan format simbol beragam.
-    Jika kamu punya API key untuk salah satu exchange (meningkatkan rate-limit), beri tahu; saya bisa menambahkan input field untuk key.
+    **Catatan:** 
+    - Prioritas sumber OHLC/price: Binance → Bybit → Bitget → Gate → KuCoin → CoinGecko → CoinMarketCap → yfinance → DexScreener.
+    - Entry Price = Support (konservatif dan cocok untuk scanner sinyal cepat).
+    - Chance Price (%) mengukur posisi harga relatif terhadap range Support→Resistance (lebih rendah = lebih dekat ke support = peluang lebih tinggi).
+    - Jika kamu ingin menyimpan/mengekspor hasil otomatis atau menambahkan API keys untuk exchange tertentu, beri tahu saya dan saya tambahkan input field.
     """
 )
